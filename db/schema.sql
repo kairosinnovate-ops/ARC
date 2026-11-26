@@ -227,3 +227,12 @@ update projects set purpose = case purpose when 'permit_sale' then 'permit' when
 alter table projects alter column purpose set default 'permit';
 alter table projects drop constraint if exists projects_purpose_check;
 alter table projects add constraint projects_purpose_check check (purpose in ('permit','construction','permit_construction'))
+;
+
+-- v6 (2026-11-26): drawing set types. A project can carry several (permit, zoning, CO, as-built…).
+alter table projects add column if not exists set_types text[] not null default '{permit}';
+update projects set set_types = case purpose
+    when 'construction' then '{construction}'::text[]
+    when 'permit_construction' then '{permit,construction}'::text[]
+    else '{permit}'::text[] end
+  where set_types = '{permit}' and purpose in ('construction','permit_construction')

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { useSession } from '../App';
-import { Dialog, Icon, Pill, SET_STATUS, fmtDate } from '../ui';
+import { Dialog, Icon, Pill, SET_STATUS, SET_TYPES, fmtDate, setTypeList } from '../ui';
 import { ProjectFields, toForm, type ProjectFormValue } from './ProjectForm';
 
 export default function ProjectsPage() {
@@ -12,6 +12,9 @@ export default function ProjectsPage() {
   const [params, setParams] = useSearchParams();
   const canCreate = s.firm.is_admin || ['pm', 'architect'].includes(s.firm.role);
   const creating = params.get('new') === '1' && canCreate;
+  const typeFilter = params.get('type') || '';
+  const shown = (projects || []).filter((p) => !typeFilter || (p.set_types || []).includes(typeFilter));
+  const usedTypes = Object.keys(SET_TYPES).filter((k) => (projects || []).some((p) => (p.set_types || []).includes(k)));
 
   useEffect(() => {
     s.setCrumbs(<><span className="sep">/</span><b>Projects</b></>);
@@ -28,7 +31,7 @@ export default function ProjectsPage() {
         <div>
           <span className="label">{s.firm.firm_name}</span>
           <h1 style={{ marginTop: 8 }}>Projects</h1>
-          <p className="hint">Each project has a PM, a drafter, an architect and an engineer. Work moves drafter → PM → architect → engineer.</p>
+          <p className="hint">Each project has a PM, a drafter, an architect and an engineer. Work moves from intake to drafting, review, final record, stamp and the client.</p>
         </div>
         <div className="row" style={{ gap: 8 }}>
           <Link className="btn ghost" to="/trash"><Icon name="trash" size={14} /> Trash</Link>
@@ -62,9 +65,24 @@ export default function ProjectsPage() {
           )}
         </div>
       )}
+      {projects && projects.length > 0 && usedTypes.length > 1 && (
+        <div className="filters" style={{ marginBottom: 14 }}>
+          <select
+            className="input"
+            style={{ width: 'auto' }}
+            value={typeFilter}
+            aria-label="Filter by drawing set type"
+            onChange={(e) => { const n = new URLSearchParams(params); if (e.target.value) n.set('type', e.target.value); else n.delete('type'); setParams(n); }}
+          >
+            <option value="">All set types</option>
+            {usedTypes.map((k) => <option key={k} value={k}>{SET_TYPES[k]}</option>)}
+          </select>
+          {typeFilter && <span className="hint">{shown.length} of {projects.length} projects</span>}
+        </div>
+      )}
       {projects && projects.length > 0 && (
         <div className="pgrid">
-          {projects.map((p) => (
+          {shown.map((p) => (
             <Link key={p.id} to={`/projects/${p.id}`} className="pcard">
               <div className="row" style={{ justifyContent: 'space-between' }}>
                 <span className="mono" style={{ color: 'var(--faint)' }}>{p.number || 'No number'}</span>
@@ -76,6 +94,7 @@ export default function ProjectsPage() {
               </div>
               <h3>{p.name}</h3>
               <div className="meta">{p.kind === 'modification' ? 'Modification' : 'Initial drawings'}{p.address ? ` · ${p.address}` : ''}</div>
+              {p.set_types?.length > 0 && <div className="tagrow">{setTypeList(p.set_types).map((t) => <span key={t} className="tag">{t}</span>)}</div>}
               <div className="meta">PM: {p.pm_name || 'none'} · Drafter: {p.drafter_name || 'not assigned'}</div>
               <div className="row hint" style={{ justifyContent: 'space-between' }}>
                 <span style={{ color: p.open_comments ? 'var(--redline)' : undefined }}>

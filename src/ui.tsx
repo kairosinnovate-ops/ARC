@@ -13,7 +13,22 @@ export const SET_STATUS: Record<string, string> = {
   engineer_review: 'Ready for stamp',
   sealed: 'Sealed',
 };
-export const PURPOSE: Record<string, string> = { permit: 'Permit set', construction: 'Construction set', permit_construction: 'Permit + construction' };
+export const SET_TYPES: Record<string, string> = {
+  schematic: 'Schematic / Concept',
+  zoning: 'Zoning / Land use',
+  site_plan: 'Site plan',
+  permit: 'Permit set',
+  construction: 'Construction documents',
+  certificate_of_occupancy: 'Certificate of Occupancy',
+  as_built: 'As-built',
+  existing_conditions: 'Existing conditions survey',
+  demolition: 'Demolition',
+  bid: 'Bid set',
+  fire_life_safety: 'Fire / Life safety',
+  variance: 'Variance / Special permit',
+  other: 'Other',
+};
+export const setTypeList = (types: string[] | null | undefined) => (types || []).map((t) => SET_TYPES[t] || t);
 const KIND_LABEL: Record<string, string> = { pdf: 'PDF', dwg: 'DWG', final_pdf: 'PDF', final_cad: 'CAD', sealed_pdf: 'SEALED', reference: 'REF', markup: 'MARKUP', other: 'FILE' };
 export const kindLabel = (k: string) => KIND_LABEL[k] || k.toUpperCase();
 export const COMMENT_STATUS: Record<string, string> = { open: 'Open', in_progress: 'In progress', addressed: 'Addressed' };

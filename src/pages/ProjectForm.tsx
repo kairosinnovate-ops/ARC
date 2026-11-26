@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { useSession } from '../App';
-import { PURPOSE, ROLE_LABEL, type Role } from '../ui';
+import { Icon, SET_TYPES, ROLE_LABEL, type Role } from '../ui';
 
 export type Member = { user_id: string; name: string; email: string; role: Role };
 
@@ -9,7 +9,7 @@ const EMPTY = {
   name: '', number: '', address: '', jurisdiction: '', permit_number: '',
   kind: 'initial', requirements: '',
   pm_id: '', drafter_id: '', architect_id: '', engineer_id: '', engineer_name: '', engineer_email: '',
-  purpose: 'permit', client_name: '', client_email: '',
+  set_types: ['permit'] as string[], client_name: '', client_email: '',
 };
 export type ProjectFormValue = typeof EMPTY;
 
@@ -17,7 +17,7 @@ export function toForm(p: any | null, me: string): ProjectFormValue {
   if (!p) return { ...EMPTY, pm_id: me };
   const out: any = { ...EMPTY };
   for (const k of Object.keys(EMPTY)) out[k] = p[k] ?? '';
-  if (!out.purpose) out.purpose = 'permit';
+  out.set_types = p.set_types?.length ? [...p.set_types] : ['permit'];
   return out;
 }
 
@@ -61,11 +61,25 @@ export function ProjectFields({ f, setF }: { f: ProjectFormValue; setF: (f: Proj
         </div>
       </div>
       <div className="field wide">
-        <span>Set type</span>
-        <div className="seg" role="radiogroup">
-          {Object.entries(PURPOSE).map(([k, l]) => (
-            <button type="button" key={k} className={f.purpose === k ? 'on' : ''} role="radio" aria-checked={f.purpose === k} onClick={() => setF({ ...f, purpose: k })}>{l}</button>
-          ))}
+        <span>Drawing set type <span className="hint">(pick all that apply)</span></span>
+        <div className="chips" role="group" aria-label="Drawing set type">
+          {Object.entries(SET_TYPES).map(([k, l]) => {
+            const on = f.set_types.includes(k);
+            return (
+              <button
+                type="button"
+                key={k}
+                className={`chip${on ? ' on' : ''}`}
+                aria-pressed={on}
+                onClick={() => {
+                  const next = on ? f.set_types.filter((x) => x !== k) : [...f.set_types, k];
+                  setF({ ...f, set_types: next.length ? next : ['permit'] });
+                }}
+              >
+                {on && <Icon name="check" size={12} />} {l}
+              </button>
+            );
+          })}
         </div>
       </div>
       <label className="field wide">

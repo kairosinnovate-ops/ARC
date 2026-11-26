@@ -265,6 +265,9 @@ async function memberOrNull(m: Member, userId: unknown): Promise<string | null> 
   return r.user_id;
 }
 
+/** Drawing set types a project can carry (several at once). */
+const SET_TYPES = ['schematic', 'zoning', 'site_plan', 'permit', 'construction', 'certificate_of_occupancy', 'as_built', 'existing_conditions', 'demolition', 'bid', 'fire_life_safety', 'variance', 'other'];
+
 function projectFields(b: any, cur: any = {}) {
   const pick = (k: string, max: number) => (b[k] !== undefined ? str(b[k], max) : cur[k] ?? '');
   const kind = b.kind !== undefined ? str(b.kind, 20) : cur.kind ?? 'initial';
@@ -273,8 +276,10 @@ function projectFields(b: any, cur: any = {}) {
   if (engineerEmail && !EMAIL.test(engineerEmail)) throw bad('Enter a valid engineer email.');
   const clientEmail = pick('client_email', 200).toLowerCase();
   if (clientEmail && !EMAIL.test(clientEmail)) throw bad('Enter a valid client email.');
-  const purpose = (b.purpose !== undefined ? str(b.purpose, 30) : cur.purpose) || 'permit';
-  if (!['permit', 'construction', 'permit_construction'].includes(purpose)) throw bad('Pick the type of set: permit, construction, or both.');
+  const rawTypes = b.set_types !== undefined ? b.set_types : cur.set_types;
+  const setTypes = [...new Set((Array.isArray(rawTypes) ? rawTypes : []).map((x: unknown) => String(x)))];
+  if (setTypes.some((x) => !SET_TYPES.includes(x))) throw bad('Unknown drawing set type.');
+  if (!setTypes.length) setTypes.push('permit');
   return {
     name: pick('name', 200),
     number: pick('number', 60),
@@ -287,7 +292,7 @@ function projectFields(b: any, cur: any = {}) {
     engineer_email: engineerEmail,
     client_name: pick('client_name', 120),
     client_email: clientEmail,
-    purpose,
+    set_types: setTypes,
   };
 }
 
@@ -300,8 +305,8 @@ async function createProject(ctx: Ctx) {
   const pm = (await memberOrNull(m, b.pm_id)) ?? ctx.user.id;
   const p = await one(
     `insert into projects (firm_id, name, number, address, jurisdiction, permit_number, kind, requirements,
-       engineer_name, engineer_email, pm_id, drafter_id, architect_id, engineer_id, created_by, client_name, client_email, purpose)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) returning *`,
+       engineer_name, engineer_email, pm_id, drafter_id, architect_id, engineer_id, created_by, client_name, client_email, set_types)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::text[]) returning *`,
     [
       m.firm_id, f.name, f.number, f.address, f.jurisdiction, f.permit_number, f.kind, f.requirements,
       f.engineer_name, f.engineer_email, pm,
@@ -309,7 +314,7 @@ async function createProject(ctx: Ctx) {
       (await memberOrNull(m, b.architect_id)) ?? (m.role === 'architect' ? ctx.user.id : null),
       await memberOrNull(m, b.engineer_id),
       ctx.user.id,
-      f.client_name, f.client_email, f.purpose,
+      f.client_name, f.client_email, f.set_types,
     ],
   );
   await log(m, ctx.user, p!.id, null, 'project_created', f.name);
@@ -369,14 +374,14 @@ async function updateProject(ctx: Ctx) {
   const row = await one(
     `update projects set name=$3, number=$4, address=$5, jurisdiction=$6, permit_number=$7, kind=$8, requirements=$9,
        engineer_name=$10, engineer_email=$11, pm_id=$12, drafter_id=$13, architect_id=$14, engineer_id=$15, archived=$16,
-       client_name=$17, client_email=$18, purpose=$19
+       client_name=$17, client_email=$18, set_types=$19::text[]
      where id = $1 and firm_id = $2 returning *`,
     [
       p.id, m.firm_id, f.name, f.number, f.address, f.jurisdiction, f.permit_number, f.kind, f.requirements,
       f.engineer_name, f.engineer_email, pmId, drafterId,
       await assign('architect_id'), await assign('engineer_id'),
       b.archived !== undefined ? !!b.archived : p.archived,
-      f.client_name, f.client_email, f.purpose,
+      f.client_name, f.client_email, f.set_types,
     ],
   );
   if (drafterId !== p.drafter_id) await log(m, ctx.user, p.id, null, 'drafter_assigned', '');

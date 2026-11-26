@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api';
 import { useSession } from '../App';
-import { Avatar, COMMENT_STATUS, ConfirmByName, Dialog, Icon, NOTE_EVENTS, PURPOSE, Pill, SET_STATUS, eventText, fmtDate, timeAgo, useToast } from '../ui';
+import { setTypeList } from '../ui';
+import { Avatar, COMMENT_STATUS, ConfirmByName, Dialog, Icon, NOTE_EVENTS, Pill, SET_STATUS, eventText, fmtDate, timeAgo, useToast } from '../ui';
 import { ProjectFields, toForm, type ProjectFormValue } from './ProjectForm';
 
 type Data = { project: any; sets: any[]; comments: any[]; events: any[]; members: any[]; my_slots: string[] };
@@ -39,8 +40,11 @@ export default function ProjectPage() {
     <main className="content">
       <div className="page-h">
         <div>
-          <span className="label">{p.kind === 'modification' ? 'Modification' : 'Initial drawings'}{p.purpose ? ` · ${PURPOSE[p.purpose]}` : ''}{p.number ? ` · ${p.number}` : ''}{p.permit_number ? ` · Permit ${p.permit_number}` : ''}</span>
+          <span className="label">{p.kind === 'modification' ? 'Modification' : 'Initial drawings'}{p.number ? ` · ${p.number}` : ''}{p.permit_number ? ` · Permit ${p.permit_number}` : ''}</span>
           <h1 style={{ marginTop: 8 }}>{p.name}</h1>
+          {p.set_types?.length > 0 && (
+            <div className="tagrow">{setTypeList(p.set_types).map((t) => <span key={t} className="tag">{t}</span>)}</div>
+          )}
           <p className="hint">{[p.address, p.jurisdiction].filter(Boolean).join(' · ') || 'Add the site address and jurisdiction.'}</p>
         </div>
         <div className="row">
