@@ -30,11 +30,14 @@ export default function ProjectsPage() {
           <h1 style={{ marginTop: 8 }}>Projects</h1>
           <p className="hint">Each project has a PM, a drafter, an architect and an engineer. Work moves drafter → PM → architect → engineer.</p>
         </div>
-        {canCreate && (
-          <button className="btn primary" onClick={() => setParams({ new: '1' })}>
-            <Icon name="plus" /> New project
-          </button>
-        )}
+        <div className="row" style={{ gap: 8 }}>
+          <Link className="btn ghost" to="/trash"><Icon name="trash" size={14} /> Trash</Link>
+          {canCreate && (
+            <button className="btn primary" onClick={() => setParams({ new: '1' })}>
+              <Icon name="plus" /> New project
+            </button>
+          )}
+        </div>
       </div>
 
       {projects && projects.length > 0 && (

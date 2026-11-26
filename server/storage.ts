@@ -1,10 +1,11 @@
-import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand, DeleteObjectsCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 export interface Storage {
   uploadUrl(key: string, contentType: string): Promise<string>;
   downloadUrl(key: string, filename: string): Promise<string>;
   size(key: string): Promise<number | null>;
+  remove(keys: string[]): Promise<void>;
 }
 
 let storage: Storage | null = null;
@@ -46,6 +47,13 @@ function s3Storage(): Storage {
         return head.ContentLength ?? null;
       } catch {
         return null;
+      }
+    },
+    remove: async (keys) => {
+      for (let i = 0; i < keys.length; i += 1000) {
+        const batch = keys.slice(i, i + 1000);
+        if (!batch.length) continue;
+        await client.send(new DeleteObjectsCommand({ Bucket, Delete: { Objects: batch.map((Key) => ({ Key })), Quiet: true } }));
       }
     },
   };

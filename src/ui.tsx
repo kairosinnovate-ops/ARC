@@ -59,18 +59,62 @@ export function Icon({ name, size = 16 }: { name: keyof typeof paths | string; s
 }
 
 export function Dialog({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
+  const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const k = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    // Only the topmost dialog closes on Escape.
+    const k = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const all = document.querySelectorAll('.dialog');
+      if (all[all.length - 1] === ref.current) onClose();
+    };
     window.addEventListener('keydown', k);
     return () => window.removeEventListener('keydown', k);
   }, [onClose]);
   return (
     <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={`dialog${wide ? ' wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
+      <div ref={ref} className={`dialog${wide ? ' wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
         <h2>{title}</h2>
         {children}
       </div>
     </div>
+  );
+}
+
+/** A destructive step the person confirms by typing the project's name. */
+export function ConfirmByName({ title, name, children, action, onClose, onConfirm }: {
+  title: string; name: string; children: ReactNode; action: string; onClose: () => void; onConfirm: (typed: string) => Promise<void>;
+}) {
+  const [typed, setTyped] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const ok = typed.trim().toLowerCase() === name.trim().toLowerCase();
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!ok) return;
+    setBusy(true);
+    setErr('');
+    try {
+      await onConfirm(typed.trim());
+    } catch (e: any) {
+      setErr(e.message);
+      setBusy(false);
+    }
+  }
+  return (
+    <Dialog title={title} onClose={onClose}>
+      <form onSubmit={submit} className="col">
+        <div className="hint" style={{ margin: 0 }}>{children}</div>
+        <label className="field">
+          <span>Type <b>{name}</b> to confirm</span>
+          <input className="input" value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus autoComplete="off" aria-label="Confirm project name" />
+        </label>
+        {err && <p className="err">{err}</p>}
+        <div className="foot">
+          <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
+          <button className="btn primary danger-fill" disabled={!ok || busy}>{busy ? 'Working…' : action}</button>
+        </div>
+      </form>
+    </Dialog>
   );
 }
 
@@ -140,6 +184,8 @@ const EVENT_TEXT: Record<string, string> = {
   comment_in_progress: 'started on comment',
   comment_addressed: 'addressed comment',
   comment_deleted: 'deleted comment',
+  project_deleted: 'moved the project to Trash',
+  project_restored: 'restored the project from Trash',
 };
 export function eventText(action: string) {
   return EVENT_TEXT[action] || action.replace(/_/g, ' ');

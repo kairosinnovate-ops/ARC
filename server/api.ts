@@ -62,7 +62,7 @@ async function log(m: { firm_id: string }, actor: { id: string; name: string }, 
 }
 
 async function loadProject(m: Member, id: string, userId: string) {
-  const p = await one(`select * from projects where id = $1 and firm_id = $2`, [id, m.firm_id]);
+  const p = await one(`select * from projects where id = $1 and firm_id = $2 and deleted_at is null`, [id, m.firm_id]);
   if (!p) throw notFound('Project not found');
   if (limitedToAssigned(m) && p.drafter_id !== userId) throw notFound('Project not found');
   return p;
@@ -203,7 +203,7 @@ async function listProjects(ctx: Ctx) {
      ) ls on true
      left join memberships pm on pm.firm_id = p.firm_id and pm.user_id = p.pm_id
      left join memberships dr on dr.firm_id = p.firm_id and dr.user_id = p.drafter_id
-     where p.firm_id = $1 and not p.archived and ($2::boolean = false or p.drafter_id = $3)
+     where p.firm_id = $1 and not p.archived and p.deleted_at is null and ($2::boolean = false or p.drafter_id = $3)
      order by p.created_at desc`,
     [m.firm_id, limitedToAssigned(m), ctx.user.id],
   );
@@ -598,7 +598,7 @@ async function stampFromToken(token: string) {
      join revision_sets s on s.id = r.revision_set_id
      join projects p on p.id = r.project_id
      join firms f on f.id = r.firm_id
-     where r.token_hash = $1`,
+     where r.token_hash = $1 and p.deleted_at is null`,
     [await sha256Hex(token)],
   );
   if (!r || r.revoked_at) throw notFound('This link is no longer active. Ask the firm for a new one.');
@@ -681,6 +681,79 @@ async function publicStamp(req: Request, path: string, method: string, body: any
   }
   void req;
   return json({ error: 'Not found' }, 404);
+}
+
+// ---------- deleting projects ----------
+
+export const TRASH_DAYS = 30;
+
+function confirmName(p: any, typed: unknown) {
+  if (str(typed, 200).toLowerCase() !== String(p.name).trim().toLowerCase()) throw bad('Type the project name exactly to confirm.');
+}
+
+async function deleteProject(ctx: Ctx) {
+  const m = firmOf(ctx);
+  const p = await loadProject(m, ctx.params[0], ctx.user.id);
+  if (!slotsOf(p, m, ctx.user.id).has('pm')) throw forbidden('Only the project manager or a firm admin can delete a project.');
+  confirmName(p, ctx.body.confirm_name);
+  await many(`update projects set deleted_at = now(), deleted_by = $2 where id = $1`, [p.id, ctx.user.id]);
+  // Any outstanding stamp links stop working with the project.
+  await many(`update stamp_requests set revoked_at = now() where project_id = $1 and used_at is null and revoked_at is null`, [p.id]);
+  await log(m, ctx.user, p.id, null, 'project_deleted', p.name);
+  return json({ ok: true, purge_after_days: TRASH_DAYS });
+}
+
+/** Deleted projects this person may restore: their own as PM, or all of the firm's for admins. */
+async function trashedProject(ctx: Ctx, id: string) {
+  const m = firmOf(ctx);
+  const p = await one(`select * from projects where id = $1 and firm_id = $2 and deleted_at is not null`, [id, m.firm_id]);
+  if (!p || (!m.is_admin && p.pm_id !== ctx.user.id)) throw notFound('Project not found in Trash');
+  return { m, p };
+}
+
+async function listTrash(ctx: Ctx) {
+  const m = firmOf(ctx);
+  const rows = await many(
+    `select p.id, p.name, p.number, p.deleted_at, mb.name as deleted_by_name,
+       p.deleted_at + interval '${TRASH_DAYS} days' as purge_at,
+       (select count(*)::int from revision_sets s where s.project_id = p.id and s.status = 'sealed') as sealed_sets,
+       (select count(*)::int from files f where f.project_id = p.id) as file_count
+     from projects p left join memberships mb on mb.firm_id = p.firm_id and mb.user_id = p.deleted_by
+     where p.firm_id = $1 and p.deleted_at is not null and ($2::boolean or p.pm_id = $3)
+     order by p.deleted_at desc`,
+    [m.firm_id, m.is_admin, ctx.user.id],
+  );
+  return json(rows);
+}
+
+async function restoreProject(ctx: Ctx) {
+  const { m, p } = await trashedProject(ctx, ctx.params[0]);
+  await many(`update projects set deleted_at = null, deleted_by = null where id = $1`, [p.id]);
+  await log(m, ctx.user, p.id, null, 'project_restored', p.name);
+  return json({ ok: true });
+}
+
+/** Removes a project's stored files, then its rows (everything else cascades). */
+export async function purgeProject(projectId: string) {
+  const keys = (await many(`select storage_key from files where project_id = $1`, [projectId])).map((r) => r.storage_key);
+  await files().remove(keys);
+  await many(`delete from projects where id = $1 and deleted_at is not null`, [projectId]);
+  return keys.length;
+}
+
+async function deleteForever(ctx: Ctx) {
+  const { p } = await trashedProject(ctx, ctx.params[0]);
+  confirmName(p, ctx.body.confirm_name);
+  const removed = await purgeProject(p.id);
+  return json({ ok: true, files_removed: removed });
+}
+
+/** Called daily by the scheduled function. */
+export async function purgeExpired() {
+  const rows = await many(`select id from projects where deleted_at < now() - interval '${TRASH_DAYS} days'`);
+  let n = 0;
+  for (const r of rows) n += await purgeProject(r.id);
+  return { projects: rows.length, files: n };
 }
 
 // ---------- city comments ----------
@@ -802,6 +875,10 @@ const routes: [string, RegExp, Handler][] = [
   ['PATCH', new RegExp(`^/team/members/${USER}$`), updateMember],
   ['DELETE', new RegExp(`^/team/members/${USER}$`), removeMember],
   ['GET', /^\/projects$/, listProjects],
+  ['GET', /^\/trash$/, listTrash],
+  ['POST', new RegExp(`^/trash/${ID}/restore$`), restoreProject],
+  ['POST', new RegExp(`^/trash/${ID}/delete$`), deleteForever],
+  ['POST', new RegExp(`^/projects/${ID}/delete$`), deleteProject],
   ['POST', /^\/projects$/, createProject],
   ['GET', new RegExp(`^/projects/${ID}$`), getProject],
   ['PATCH', new RegExp(`^/projects/${ID}$`), updateProject],

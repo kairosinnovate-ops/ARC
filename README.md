@@ -20,6 +20,7 @@ Permit workspace for architecture and engineering firms: revision sets that pair
   The PM can send work back to the drafter. The architect, or the engineer, sends rework and markups to the PM (`pm_rework`). The PM forwards them to the drafter or resubmits to the architect.
 - Drafters (non-admin) only see projects they are assigned to, and don't see the architect's markups or notes until the PM forwards them.
 - **Engineer stamp:** an engineer with an account seals in the app. For engineers not on Arc yet, the PM or architect creates a stamp link (`/stamp/<token>`, valid 30 days, one active per set). Arc opens a prefilled Gmail draft with the link. The engineer downloads the set, uploads the stamped PDF and returns it, or sends notes back, with no account. Only a SHA-256 of the token is stored.
+- **Deleting projects:** the project's PM (or a firm admin) deletes it by typing its name. It moves to Trash (`projects.deleted_at`), is hidden from everyone, and its open stamp links are revoked. It can be restored for 30 days, or deleted forever (typed name again), which removes its stored files. The scheduled function `purge-trash` runs daily and purges anything in Trash for more than 30 days.
 - Every query is scoped to the caller's firm (`x-arc-firm` header picks the active firm). Sealed sets are locked.
 
 ## Run locally

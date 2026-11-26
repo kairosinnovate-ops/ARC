@@ -170,3 +170,11 @@ create table if not exists stamp_requests (
   revoked_at timestamptz
 );
 create index if not exists stamp_requests_set_idx on stamp_requests(revision_set_id)
+;
+
+-- ---------------------------------------------------------------------------
+-- v3 (2026-11-26): deleting projects. Deleted projects sit in Trash for 30 days and can be restored;
+-- after that (or when deleted for good) the rows and their stored files are removed.
+-- ---------------------------------------------------------------------------
+alter table projects add column if not exists deleted_at timestamptz;
+alter table projects add column if not exists deleted_by text

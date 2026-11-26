@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api';
 import { useSession } from '../App';
-import { Avatar, COMMENT_STATUS, Dialog, Icon, NOTE_EVENTS, Pill, SET_STATUS, eventText, fmtDate, timeAgo, useToast } from '../ui';
+import { Avatar, COMMENT_STATUS, ConfirmByName, Dialog, Icon, NOTE_EVENTS, Pill, SET_STATUS, eventText, fmtDate, timeAgo, useToast } from '../ui';
 import { ProjectFields, toForm, type ProjectFormValue } from './ProjectForm';
 
 type Data = { project: any; sets: any[]; comments: any[]; events: any[]; members: any[]; my_slots: string[] };
@@ -148,6 +148,9 @@ function EditProject({ project, onClose, onSaved }: { project: any; onClose: () 
   const s = useSession();
   const [f, setF] = useState<ProjectFormValue>(toForm(project, s.user.id));
   const [err, setErr] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const toast = useToast();
+  const nav = useNavigate();
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     try {
@@ -170,6 +173,28 @@ function EditProject({ project, onClose, onSaved }: { project: any; onClose: () 
           <button className="btn primary">Save</button>
         </div>
       </form>
+      <div className="danger-zone">
+        <div>
+          <b>Delete this project</b>
+          <div className="hint">It goes to Trash for 30 days, then it and its files are removed for good.</div>
+        </div>
+        <button type="button" className="btn danger" onClick={() => setDeleting(true)}><Icon name="trash" size={14} /> Delete project</button>
+      </div>
+      {deleting && (
+        <ConfirmByName
+          title="Delete project?"
+          name={project.name}
+          action="Move to Trash"
+          onClose={() => setDeleting(false)}
+          onConfirm={async (typed) => {
+            await api(`/projects/${project.id}/delete`, { body: { confirm_name: typed } });
+            toast(`${project.name} moved to Trash. You can restore it for 30 days.`);
+            nav('/trash');
+          }}
+        >
+          Nobody on the team will see it, and any stamp links sent to engineers stop working. You or a firm admin can restore it from Trash within 30 days.
+        </ConfirmByName>
+      )}
     </Dialog>
   );
 }

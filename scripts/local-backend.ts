@@ -2,7 +2,7 @@
 // Uses LOCAL_DATABASE_URL (default postgres://arc:arc@localhost/arc), stores files in .local-files/,
 // and signs people in with a throwaway key so the app can be tried without Neon.
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { mkdirSync, writeFileSync, readFileSync, existsSync, statSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, statSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { generateKeyPair, SignJWT, createLocalJWKSet, exportJWK } from 'jose';
@@ -25,6 +25,9 @@ setStorage({
   size: async (key) => {
     const p = join(root, key);
     return existsSync(p) ? statSync(p).size : null;
+  },
+  remove: async (keys) => {
+    for (const k of keys) rmSync(join(root, k), { force: true });
   },
 });
 

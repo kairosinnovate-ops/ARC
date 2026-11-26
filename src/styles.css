@@ -81,6 +81,9 @@ kbd { font-family: var(--f-mono); font-size: 10.5px; padding: 1px 5px; border-ra
 .btn.seal { background: var(--seal); border-color: var(--seal); color: #06140e; font-weight: 600; }
 .btn.seal:hover { box-shadow: 0 0 0 4px var(--seal-soft); }
 .btn.danger { color: var(--redline); }
+.btn.danger-fill { background: var(--redline); border-color: var(--redline); color: #fff; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.danger-zone { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
 .btn:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; }
 .btn.sm { padding: 4px 10px; font-size: 12px; border-radius: 8px; }
 .btn.ghost { background: none; border-color: transparent; color: var(--muted); }

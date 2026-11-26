@@ -7,6 +7,7 @@ import ProjectsPage from './pages/Projects';
 import ProjectPage from './pages/Project';
 import SetPage from './pages/RevisionSet';
 import TeamPage from './pages/Team';
+import TrashPage from './pages/Trash';
 import StampPage from './pages/Stamp';
 
 export type Firm = { firm_id: string; firm_name: string; role: Role; is_admin: boolean };
@@ -298,6 +299,7 @@ function Shell() {
           <Route path="/projects/:id" element={<ProjectPage />} />
           <Route path="/sets/:id" element={<SetPage />} />
           <Route path="/team" element={<TeamPage />} />
+          <Route path="/trash" element={<TrashPage />} />
           <Route path="*" element={<div className="content"><h1>Page not found</h1><Link className="link" to="/">Back to projects</Link></div>} />
         </Routes>
       </div>
