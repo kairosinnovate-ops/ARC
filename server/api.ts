@@ -241,11 +241,17 @@ async function listProjects(ctx: Ctx) {
     `select p.*,
        (select count(*)::int from city_comments c where c.project_id = p.id and c.status <> 'addressed') as open_comments,
        (select max(c.received_on) from city_comments c where c.project_id = p.id) as last_comments_on,
+       (select count(*)::int from city_comments c where c.project_id = p.id and c.status <> 'addressed' and c.round_set_id is null) as unrounded_comments,
        ls.rev_number as latest_rev, ls.status as latest_status, ls.id as latest_set_id,
+       ls.reason as latest_reason, ls.delivered_at as latest_delivered_at,
+       (select count(*)::int from events e where e.revision_set_id = ls.id
+          and e.action in ('pm_returned','architect_returned','engineer_returned')) as latest_returns,
+       (select count(*)::int from revision_sets s2 where s2.project_id = p.id and s2.reason = 'city' and s2.rev_number <= ls.rev_number) as city_round,
+       (select max(s3.delivered_at) from revision_sets s3 where s3.project_id = p.id) as last_delivered_at,
        pm.name as pm_name, dr.name as drafter_name
      from projects p
      left join lateral (
-       select id, rev_number, status from revision_sets s where s.project_id = p.id order by rev_number desc limit 1
+       select id, rev_number, status, reason, delivered_at from revision_sets s where s.project_id = p.id order by rev_number desc limit 1
      ) ls on true
      left join memberships pm on pm.firm_id = p.firm_id and pm.user_id = p.pm_id
      left join memberships dr on dr.firm_id = p.firm_id and dr.user_id = p.drafter_id
@@ -254,8 +260,42 @@ async function listProjects(ctx: Ctx) {
      order by p.created_at desc`,
     [m.firm_id, limitedToAssigned(m), ctx.user.id],
   );
-  if (!limitedToAssigned(m)) return json(rows);
-  return json(rows.map((r) => ({ ...r, drafter_name: r.drafter_id === ctx.user.id ? r.drafter_name : null })));
+  const out: any[] = rows.map((r) => {
+    const st = projectStage(r);
+    const yourTurn = !!st.waiting_on && slotsOf(r, m, ctx.user.id).has(st.waiting_on)
+      // Admins can act as PM everywhere, but a PM step is only "theirs" when they are the PM or nobody is.
+      && (st.waiting_on !== 'pm' || r.pm_id === ctx.user.id || !r.pm_id);
+    return { ...r, ...st, your_turn: yourTurn };
+  });
+  if (!limitedToAssigned(m)) return json(out);
+  return json(out.map((r) => ({ ...r, drafter_name: r.drafter_id === ctx.user.id ? r.drafter_name : null })));
+}
+
+type Stage = 'intake' | 'review' | 'final_record' | 'stamp' | 'ready' | 'delivered' | 'city';
+/**
+ * Where a project is, and whose move it is, from its latest revision set.
+ * intake -> review (draft / PM check / architect / rework, numbered by round) -> final_record -> stamp
+ * -> ready (stamped, not yet sent to the client) -> delivered. City comments make it a city revision round.
+ */
+function projectStage(r: any): { stage: Stage; round: number; waiting_on: Slot | null } {
+  const status: string | null = r.latest_status;
+  const city = r.latest_reason === 'city';
+  if (!status) return { stage: 'intake', round: 0, waiting_on: 'pm' };
+  if (status === 'sealed') {
+    if (r.unrounded_comments > 0) return { stage: 'city', round: (r.city_round || 0) + 1, waiting_on: 'pm' };
+    if (!r.latest_delivered_at) return { stage: 'ready', round: 0, waiting_on: 'pm' };
+    return { stage: 'delivered', round: 0, waiting_on: null };
+  }
+  const who: Record<string, Slot> = {
+    intake: 'pm', draft: 'drafter', pm_review: 'pm', architect_review: 'architect', pm_rework: 'pm',
+    final_record: 'drafter', engineer_review: 'engineer',
+  };
+  const waiting_on = who[status] ?? null;
+  if (city) return { stage: 'city', round: r.city_round || 1, waiting_on };
+  if (status === 'intake') return { stage: 'intake', round: 0, waiting_on };
+  if (status === 'final_record') return { stage: 'final_record', round: 0, waiting_on };
+  if (status === 'engineer_review') return { stage: 'stamp', round: 0, waiting_on };
+  return { stage: 'review', round: 1 + (r.latest_returns || 0), waiting_on };
 }
 
 async function memberOrNull(m: Member, userId: unknown): Promise<string | null> {

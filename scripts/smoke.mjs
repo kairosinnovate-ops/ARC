@@ -215,3 +215,28 @@ ok((await PM(`/projects/${p.id}`)).project.set_types.join() === 'permit', 'set t
 ok((await PM(`/projects/${p.id}`, 'PATCH', { set_types: ['sale'] })).status === 400, 'unknown set type is rejected');
 ok((await PM(`/projects/${p.id}`, 'PATCH', { set_types: ['zoning', 'certificate_of_occupancy', 'zoning'] })).set_types.join() === 'zoning,certificate_of_occupancy', 'project carries several set types');
 ok((await PM('/projects'))._arr.find((x) => x.id === p.id).set_types.includes('zoning'), 'set types in the project list');
+
+// Dashboard: stage and whose turn it is.
+const row = async (api, id) => (await api('/projects'))._arr.find((x) => x.id === id);
+const sp = await PM('/projects', 'POST', { name: 'Stage Check', drafter_id: dme.user.id, architect_id: ame.user.id });
+let r0 = await row(PM, sp.id);
+ok(r0.stage === 'intake' && r0.waiting_on === 'pm' && r0.your_turn, 'new project is intake, PM turn');
+const sx = await PM(`/projects/${sp.id}/sets`, 'POST', { title: 'Permit set', brief: 'Draw it.' });
+r0 = await row(PM, sp.id);
+ok(r0.stage === 'review' && r0.round === 1 && r0.waiting_on === 'drafter' && !r0.your_turn, 'with drafter: review round 1, not PM turn');
+ok((await row(D, sp.id)).your_turn, 'drafter sees their turn');
+await up(D, sx.id, 'A-101.pdf', 'pdf', 'A-101', Buffer.from('%PDF stage'));
+await D(`/sets/${sx.id}/action`, 'POST', { action: 'submit' });
+ok((await row(PM, sp.id)).your_turn && !(await row(D, sp.id)).your_turn, 'after submit it is the PM turn');
+await PM(`/sets/${sx.id}/action`, 'POST', { action: 'pm_return', note: 'Fix the stair.' });
+ok((await row(PM, sp.id)).round === 2, 'a return starts review round 2');
+await D(`/sets/${sx.id}/action`, 'POST', { action: 'submit' });
+await PM(`/sets/${sx.id}/action`, 'POST', { action: 'pm_approve' });
+ok((await row(A, sp.id)).your_turn && (await row(PM, sp.id)).waiting_on === 'architect', 'architect review is the architect turn');
+await A(`/sets/${sx.id}/action`, 'POST', { action: 'architect_approve' });
+ok((await row(PM, sp.id)).stage === 'final_record' && (await row(D, sp.id)).your_turn, 'awaiting final record, drafter turn');
+await finalRecord(sx.id);
+const sst = await row(PM, sp.id);
+ok(sst.stage === 'stamp' && sst.waiting_on === 'engineer' && !sst.your_turn, 'awaiting stamp, waiting on engineer');
+const hpr = await row(PM, p.id);
+ok(hpr.stage === 'delivered' && hpr.waiting_on === null && hpr.last_delivered_at, 'delivered project waits on nobody');
