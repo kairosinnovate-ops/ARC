@@ -8,6 +8,7 @@ import ProjectPage from './pages/Project';
 import SetPage from './pages/RevisionSet';
 import TeamPage from './pages/Team';
 import TrashPage from './pages/Trash';
+import DeliveryPage from './pages/Delivery';
 import StampPage from './pages/Stamp';
 
 export type Firm = { firm_id: string; firm_name: string; role: Role; is_admin: boolean };
@@ -38,6 +39,7 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/stamp/:token" element={<StampPage />} />
+          <Route path="/d/:token" element={<DeliveryPage />} />
           <Route path="*" element={<Boot />} />
         </Routes>
       </BrowserRouter>

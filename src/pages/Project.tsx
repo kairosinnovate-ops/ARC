@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api';
 import { useSession } from '../App';
-import { Avatar, COMMENT_STATUS, ConfirmByName, Dialog, Icon, NOTE_EVENTS, Pill, SET_STATUS, eventText, fmtDate, timeAgo, useToast } from '../ui';
+import { Avatar, COMMENT_STATUS, ConfirmByName, Dialog, Icon, NOTE_EVENTS, PURPOSE, Pill, SET_STATUS, eventText, fmtDate, timeAgo, useToast } from '../ui';
 import { ProjectFields, toForm, type ProjectFormValue } from './ProjectForm';
 
 type Data = { project: any; sets: any[]; comments: any[]; events: any[]; members: any[]; my_slots: string[] };
@@ -15,7 +15,7 @@ export default function ProjectPage() {
   const [d, setD] = useState<Data | null>(null);
   const [err, setErr] = useState('');
   const [editing, setEditing] = useState(false);
-  const [sending, setSending] = useState(false);
+  const [sending, setSending] = useState<null | { intake?: boolean; fromComments?: boolean }>(null);
 
   const load = useCallback(() => api<Data>(`/projects/${id}`).then(setD).catch((e) => setErr(e.message)), [id]);
   useEffect(() => {
@@ -32,20 +32,26 @@ export default function ProjectPage() {
   const nextRev = sets.length ? sets[0].rev_number + 1 : 0;
 
   const isPM = d.my_slots.includes('pm');
+  const isArchitect = d.my_slots.includes('architect');
   const name = (id: string | null) => d.members.find((m) => m.user_id === id)?.name;
 
   return (
     <main className="content">
       <div className="page-h">
         <div>
-          <span className="label">{p.kind === 'modification' ? 'Modification' : 'Initial drawings'}{p.number ? ` · ${p.number}` : ''}{p.permit_number ? ` · Permit ${p.permit_number}` : ''}</span>
+          <span className="label">{p.kind === 'modification' ? 'Modification' : 'Initial drawings'}{p.purpose ? ` · ${PURPOSE[p.purpose]}` : ''}{p.number ? ` · ${p.number}` : ''}{p.permit_number ? ` · Permit ${p.permit_number}` : ''}</span>
           <h1 style={{ marginTop: 8 }}>{p.name}</h1>
           <p className="hint">{[p.address, p.jurisdiction].filter(Boolean).join(' · ') || 'Add the site address and jurisdiction.'}</p>
         </div>
         <div className="row">
           {isPM && <button className="btn" onClick={() => setEditing(true)}>Edit project and people</button>}
+          {!active && (isPM || isArchitect) && (
+            <button className={`btn${isPM ? '' : ' primary'}`} onClick={() => setSending({ intake: true })}>
+              <Icon name="plus" /> Start Rev {nextRev} intake
+            </button>
+          )}
           {!active && isPM && (
-            <button className="btn primary" onClick={() => setSending(true)}>
+            <button className="btn primary" onClick={() => setSending({})}>
               <Icon name="plus" /> Send Rev {nextRev} to drafter
             </button>
           )}
@@ -65,12 +71,15 @@ export default function ProjectPage() {
               {isPM && <button className="btn sm" onClick={() => setEditing(true)}>Change</button>}
             </div>
             <div className="slots">
-              {[
+              {([
                 ['PM', p.pm_id, 'Not set'],
                 ['Drafter', p.drafter_id, 'Not assigned'],
                 ['Architect', p.architect_id, 'Not assigned'],
                 ['Engineer', p.engineer_id, p.engineer_email ? `${p.engineer_name || p.engineer_email} (by email)` : 'Not assigned'],
-              ].map(([label, id, none]) => (
+              ] as [string, string | null, string][])
+                // Only the PM sees the whole team. Others see the PM and the people they hand work to.
+                .filter(([label, id]) => isPM || id || (label === 'Engineer' && p.engineer_email))
+                .map(([label, id, none]) => (
                 <div className="slot" key={label}>
                   <Avatar name={name(id) || (label === 'Engineer' ? p.engineer_name || p.engineer_email : '') || '?'} />
                   <div className="who">
@@ -80,9 +89,13 @@ export default function ProjectPage() {
                 </div>
               ))}
             </div>
+            {isPM && (p.client_name || p.client_email) && (
+              <div className="hint" style={{ marginTop: 12 }}>Client: {p.client_name || p.client_email}{p.client_name && p.client_email ? ` · ${p.client_email}` : ''}</div>
+            )}
+            {!isPM && <div className="hint" style={{ marginTop: 12 }}>Questions about this project go to {name(p.pm_id) || 'the project manager'}.</div>}
             {p.requirements && (
               <>
-                <div className="label" style={{ margin: '16px 0 8px' }}>Requirements</div>
+                <div className="label" style={{ margin: '16px 0 8px' }}>Scope and requirements</div>
                 <div className="brief">{p.requirements}</div>
               </>
             )}
@@ -90,12 +103,21 @@ export default function ProjectPage() {
           <section className="card">
             <div className="card-h">
               <h2>Revision sets</h2>
-              <span className="hint">Each set pairs the PDF sheets with their DWG source.</span>
+              <span className="hint">Review rounds are PDF. Each approved set keeps its final PDF and CAD.</span>
             </div>
             {sets.length === 0 ? (
               <div className="empty">
-                {isPM ? 'No revisions yet. Send Rev 0 to the drafter with what needs to be drawn.' : 'No revisions yet. The project manager will send the first one.'}
-                {isPM && <div style={{ marginTop: 12 }}><button className="btn primary" onClick={() => setSending(true)}><Icon name="plus" /> Send Rev 0 to drafter</button></div>}
+                {isPM
+                  ? 'No revisions yet. Start intake to collect the site notes and sketches, or send Rev 0 straight to the drafter.'
+                  : isArchitect
+                    ? 'No revisions yet. Start intake to share your site notes and sketches with the PM.'
+                    : 'No revisions yet. The project manager will send the first one.'}
+                {(isPM || isArchitect) && (
+                  <div className="row" style={{ marginTop: 12 }}>
+                    <button className={`btn${isPM ? '' : ' primary'}`} onClick={() => setSending({ intake: true })}><Icon name="plus" /> Start intake</button>
+                    {isPM && <button className="btn primary" onClick={() => setSending({})}><Icon name="plus" /> Send Rev 0 to drafter</button>}
+                  </div>
+                )}
               </div>
             ) : (
               <div className="queue">
@@ -104,7 +126,8 @@ export default function ProjectPage() {
                     <div className="s">
                       <div className="t">Rev {x.rev_number}{x.title ? ` · ${x.title}` : ''}</div>
                       <div className="sub">
-                        {x.pdf_count} PDF · {x.dwg_count} DWG · {x.sealed_at ? `sealed ${fmtDate(x.sealed_at)}` : `started ${fmtDate(x.created_at)}`}
+                        {x.reason === 'city' ? 'Per city comments · ' : ''}{x.pdf_count} PDF · {x.sealed_at ? `sealed ${fmtDate(x.sealed_at)}` : `started ${fmtDate(x.created_at)}`}
+                        {x.delivered_at ? ` · sent to client ${fmtDate(x.delivered_at)}` : ''}
                       </div>
                     </div>
                     <Pill kind={`st-${x.status}`}>{SET_STATUS[x.status]}</Pill>
@@ -113,7 +136,7 @@ export default function ProjectPage() {
               </div>
             )}
           </section>
-          <CommentLog data={d} reload={load} />
+          <CommentLog data={d} reload={load} canStartRound={isPM && !active} onStartRound={() => setSending({ fromComments: true })} />
         </div>
         <section className="card">
           <h2>Activity</h2>
@@ -139,7 +162,18 @@ export default function ProjectPage() {
         </section>
       </div>
       {editing && <EditProject project={p} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); load(); }} />}
-      {sending && <SendToDrafter project={p} rev={nextRev} drafter={name(p.drafter_id)} onClose={() => setSending(false)} onSent={(id) => nav(`/sets/${id}`)} onEdit={() => { setSending(false); setEditing(true); }} />}
+      {sending && (
+        <SendToDrafter
+          project={p}
+          rev={nextRev}
+          drafter={name(p.drafter_id)}
+          intake={!!sending.intake}
+          comments={sending.fromComments ? d.comments.filter((c) => c.status !== 'addressed') : undefined}
+          onClose={() => setSending(null)}
+          onSent={(id) => nav(`/sets/${id}`)}
+          onEdit={() => { setSending(null); setEditing(true); }}
+        />
+      )}
     </main>
   );
 }
@@ -199,14 +233,21 @@ function EditProject({ project, onClose, onSaved }: { project: any; onClose: () 
   );
 }
 
-function SendToDrafter({ project, rev, drafter, onClose, onSent, onEdit }: {
-  project: any; rev: number; drafter?: string; onClose: () => void; onSent: (id: string) => void; onEdit: () => void;
+function SendToDrafter({ project, rev, drafter, intake, comments, onClose, onSent, onEdit }: {
+  project: any; rev: number; drafter?: string; intake: boolean; comments?: any[]; onClose: () => void; onSent: (id: string) => void; onEdit: () => void;
 }) {
-  const [title, setTitle] = useState(rev === 0 ? (project.kind === 'modification' ? 'Modification' : 'Initial drawings') : '');
-  const [brief, setBrief] = useState(rev === 0 ? project.requirements : '');
+  const fromComments = !!comments;
+  const [title, setTitle] = useState(
+    fromComments ? `City comments round` : rev === 0 ? (project.kind === 'modification' ? 'Modification' : 'Initial drawings') : '',
+  );
+  const [brief, setBrief] = useState(
+    fromComments
+      ? 'Revise the drawings per the city comments:\n' + comments!.map((c) => `- #${c.number || '?'}${c.sheet ? ` (${c.sheet})` : ''}: ${c.body}`).join('\n')
+      : rev === 0 && !intake ? project.requirements : '',
+  );
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
-  if (!drafter)
+  if (!intake && !drafter)
     return (
       <Dialog title={`Send Rev ${rev} to a drafter`} onClose={onClose}>
         <p>Pick a drafter for this project first.</p>
@@ -217,7 +258,9 @@ function SendToDrafter({ project, rev, drafter, onClose, onSent, onEdit }: {
     e.preventDefault();
     setBusy(true);
     try {
-      const set = await api(`/projects/${project.id}/sets`, { body: { title, brief } });
+      const set = await api(`/projects/${project.id}/sets`, {
+        body: intake ? { title, note: brief, intake: true, from_comments: fromComments } : { title, brief, from_comments: fromComments },
+      });
       onSent(set.id);
     } catch (e: any) {
       setErr(e.message);
@@ -225,18 +268,26 @@ function SendToDrafter({ project, rev, drafter, onClose, onSent, onEdit }: {
     }
   }
   return (
-    <Dialog title={`Send Rev ${rev} to ${drafter}`} onClose={onClose} wide>
+    <Dialog title={intake ? `Start Rev ${rev} intake` : `Send Rev ${rev} to ${drafter}`} onClose={onClose} wide>
       <form onSubmit={send} className="col">
+        {intake && <p className="hint" style={{ margin: 0 }}>Intake is where the architect shares the site visit, hand sketches and notes. The PM then writes the scope and sends it to the drafter.</p>}
         <label className="field"><span>Title</span><input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Permit set, City comments round 1…" /></label>
         <label className="field">
-          <span>What the drafter needs to do</span>
-          <textarea className="input" style={{ minHeight: 160 }} value={brief} onChange={(e) => setBrief(e.target.value)} required placeholder="List the drawings or changes, standards to follow, and the due date." />
+          <span>{intake ? 'Site notes (you can add sketches and photos next)' : 'What the drafter needs to do'}</span>
+          <textarea
+            className="input"
+            style={{ minHeight: 160 }}
+            value={brief}
+            onChange={(e) => setBrief(e.target.value)}
+            required={!intake}
+            placeholder={intake ? 'What you saw on site, what the client wants, anything the drafter should know.' : 'List the drawings or changes, standards to follow, and the due date.'}
+          />
         </label>
-        <p className="hint" style={{ margin: 0 }}>After sending, you can attach reference drawings on the revision page.</p>
+        {!intake && <p className="hint" style={{ margin: 0 }}>After sending, you can attach reference drawings on the revision page.</p>}
         {err && <p className="err">{err}</p>}
         <div className="foot">
           <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
-          <button className="btn primary" disabled={busy}>{busy ? 'Sending…' : 'Send to drafter'}</button>
+          <button className="btn primary" disabled={busy}>{busy ? 'Working…' : intake ? 'Start intake' : 'Send to drafter'}</button>
         </div>
       </form>
     </Dialog>
@@ -245,7 +296,7 @@ function SendToDrafter({ project, rev, drafter, onClose, onSent, onEdit }: {
 
 // ---------------- City comment log ----------------
 
-function CommentLog({ data, reload }: { data: Data; reload: () => void }) {
+function CommentLog({ data, reload, canStartRound, onStartRound }: { data: Data; reload: () => void; canStartRound: boolean; onStartRound: () => void }) {
   const [filter, setFilter] = useState<'active' | 'all' | 'addressed'>('active');
   const [sheet, setSheet] = useState('');
   const [adding, setAdding] = useState(false);
@@ -260,6 +311,7 @@ function CommentLog({ data, reload }: { data: Data; reload: () => void }) {
       (filter === 'all' || (filter === 'addressed' ? c.status === 'addressed' : c.status !== 'addressed')) && (!sheet || c.sheet === sheet),
   );
   const openCount = data.comments.filter((c) => c.status !== 'addressed').length;
+  const waiting = data.comments.filter((c) => c.status !== 'addressed' && !c.round_set_id).length;
 
   return (
     <section className="card">
@@ -275,6 +327,12 @@ function CommentLog({ data, reload }: { data: Data; reload: () => void }) {
           <button className="btn" onClick={() => setAdding(true)}><Icon name="plus" /> Add comment</button>
         </div>
       </div>
+      {canStartRound && waiting > 0 && (
+        <div className="actionbox card row" style={{ marginBottom: 12, justifyContent: 'space-between' }}>
+          <span><b>{waiting} city comment{waiting === 1 ? '' : 's'} not in a revision yet.</b> <span className="hint">Start the next round to send them to the drafter.</span></span>
+          <button className="btn primary" onClick={onStartRound}>Start revision for city comments</button>
+        </div>
+      )}
       {data.comments.length > 0 && (
         <div className="filters" style={{ marginBottom: 12 }}>
           <div className="seg">
@@ -307,7 +365,8 @@ function CommentLog({ data, reload }: { data: Data; reload: () => void }) {
                   {c.sheet && <span className="mono">{c.sheet}</span>}
                   {c.discipline && <span>{c.discipline}</span>}
                   {c.revision_set_id && revOf[c.revision_set_id] !== undefined && <span>on Rev {revOf[c.revision_set_id]}</span>}
-                  <span>{c.owner_id ? `Owner: ${people[c.owner_id] || 'Former member'}` : 'No owner'}</span>
+                  {c.round_set_id && revOf[c.round_set_id] !== undefined && c.status !== 'addressed' && <span>Being fixed in Rev {revOf[c.round_set_id]}</span>}
+                  <span>{c.owner_id ? `Owner: ${people[c.owner_id] || 'Someone on the team'}` : 'No owner'}</span>
                   {c.status !== 'addressed' ? (
                     <span className={`wait${c.days_waiting >= 7 ? ' late' : ''}`}>{c.days_waiting} day{c.days_waiting === 1 ? '' : 's'} waiting</span>
                   ) : (

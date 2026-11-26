@@ -40,8 +40,50 @@ function requireAdmin(ctx: Ctx) {
   return m;
 }
 
-/** Drafters who aren't admins only see the projects they are assigned to. */
-const limitedToAssigned = (m: Member) => m.role === 'drafter' && !m.is_admin;
+/** Only PMs and admins see every project. Drafters, architects and engineers see the projects they are on. */
+const limitedToAssigned = (m: Member) => !m.is_admin && m.role !== 'pm';
+const onProject = (p: any, userId: string) => [p.pm_id, p.drafter_id, p.architect_id, p.engineer_id].includes(userId);
+
+/**
+ * Only the PM (and admins) see who's who on a project. Everyone else sees the PM and the person who hands them work:
+ * the architect also sees the engineer they send the set to, and the engineer sees the architect.
+ * Returns null when the viewer may see everyone.
+ */
+function visiblePeople(p: any, slots: Set<Slot>, userId: string): Set<string> | null {
+  if (slots.has('pm')) return null;
+  const v = new Set<string>([userId]);
+  if (p.pm_id) v.add(p.pm_id);
+  if (slots.has('architect') && p.engineer_id) v.add(p.engineer_id);
+  if (slots.has('engineer') && p.architect_id) v.add(p.architect_id);
+  return v;
+}
+function roleOf(p: any, id: string) {
+  if (id === p.pm_id) return 'Project manager';
+  if (id === p.drafter_id) return 'Drafter';
+  if (id === p.architect_id) return 'Architect';
+  if (id === p.engineer_id || id.startsWith('stamp:')) return 'Engineer';
+  if (id.startsWith('client:')) return 'Client';
+  return 'Team member';
+}
+const canSee = (vis: Set<string> | null, slots: Set<Slot>, id: string) =>
+  !vis || vis.has(id) || (id.startsWith('stamp:') && slots.has('architect'));
+
+function redactProject(p: any, slots: Set<Slot>, vis: Set<string> | null) {
+  if (!vis) return p;
+  const q = { ...p, client_name: '', client_email: '' };
+  for (const k of ['drafter_id', 'architect_id', 'engineer_id']) if (q[k] && !vis.has(q[k])) q[k] = null;
+  if (!slots.has('architect') && !slots.has('engineer')) q.engineer_name = q.engineer_email = '';
+  return q;
+}
+const PRIVATE_NOTES = ['stamp_link_sent', 'client_link_sent'];
+function redactPeople<T extends { actor_id?: string; uploaded_by?: string }>(rows: T[], p: any, slots: Set<Slot>, vis: Set<string> | null, nameKey: 'actor_name' | 'uploaded_by_name', idKey: 'actor_id' | 'uploaded_by'): T[] {
+  if (!vis) return rows;
+  return rows.map((r: any) => {
+    const id = String(r[idKey] || '');
+    const out = canSee(vis, slots, id) ? r : { ...r, [nameKey]: roleOf(p, id) };
+    return PRIVATE_NOTES.includes(out.action) && !slots.has('architect') ? { ...out, note: '' } : out;
+  });
+}
 
 /** Which slots on this project the user fills. Admins can always act as PM. */
 function slotsOf(p: any, m: Member, userId: string): Set<Slot> {
@@ -64,7 +106,7 @@ async function log(m: { firm_id: string }, actor: { id: string; name: string }, 
 async function loadProject(m: Member, id: string, userId: string) {
   const p = await one(`select * from projects where id = $1 and firm_id = $2 and deleted_at is null`, [id, m.firm_id]);
   if (!p) throw notFound('Project not found');
-  if (limitedToAssigned(m) && p.drafter_id !== userId) throw notFound('Project not found');
+  if (limitedToAssigned(m) && !onProject(p, userId)) throw notFound('Project not found');
   return p;
 }
 async function loadSet(m: Member, id: string, userId: string) {
@@ -126,6 +168,10 @@ async function team(ctx: Ctx) {
     `select user_id, email, name, role, is_admin, created_at from memberships where firm_id = $1 order by created_at`,
     [m.firm_id],
   );
+  if (limitedToAssigned(m)) {
+    // Only PMs and admins see who's who. Others see themselves and the firm's PMs.
+    return json({ members: members.filter((x) => x.user_id === ctx.user.id || x.role === 'pm' || x.is_admin).map((x) => ({ ...x, email: x.user_id === ctx.user.id ? x.email : '' })), invites: [], limited: true });
+  }
   const invites = await many(
     `select id, email, role, is_admin, created_at from invites where firm_id = $1 and accepted_at is null order by created_at`,
     [m.firm_id],
@@ -203,11 +249,13 @@ async function listProjects(ctx: Ctx) {
      ) ls on true
      left join memberships pm on pm.firm_id = p.firm_id and pm.user_id = p.pm_id
      left join memberships dr on dr.firm_id = p.firm_id and dr.user_id = p.drafter_id
-     where p.firm_id = $1 and not p.archived and p.deleted_at is null and ($2::boolean = false or p.drafter_id = $3)
+     where p.firm_id = $1 and not p.archived and p.deleted_at is null
+       and ($2::boolean = false or $3 in (p.pm_id, p.drafter_id, p.architect_id, p.engineer_id))
      order by p.created_at desc`,
     [m.firm_id, limitedToAssigned(m), ctx.user.id],
   );
-  return json(rows);
+  if (!limitedToAssigned(m)) return json(rows);
+  return json(rows.map((r) => ({ ...r, drafter_name: r.drafter_id === ctx.user.id ? r.drafter_name : null })));
 }
 
 async function memberOrNull(m: Member, userId: unknown): Promise<string | null> {
@@ -223,6 +271,10 @@ function projectFields(b: any, cur: any = {}) {
   if (!['initial', 'modification'].includes(kind)) throw bad('Project type must be initial drawings or modification.');
   const engineerEmail = pick('engineer_email', 200).toLowerCase();
   if (engineerEmail && !EMAIL.test(engineerEmail)) throw bad('Enter a valid engineer email.');
+  const clientEmail = pick('client_email', 200).toLowerCase();
+  if (clientEmail && !EMAIL.test(clientEmail)) throw bad('Enter a valid client email.');
+  const purpose = b.purpose !== undefined ? str(b.purpose, 20) : cur.purpose ?? '';
+  if (!['', 'permit', 'sale', 'permit_sale'].includes(purpose)) throw bad('Pick what the drawings are for.');
   return {
     name: pick('name', 200),
     number: pick('number', 60),
@@ -233,6 +285,9 @@ function projectFields(b: any, cur: any = {}) {
     requirements: pick('requirements', 8000),
     engineer_name: pick('engineer_name', 120),
     engineer_email: engineerEmail,
+    client_name: pick('client_name', 120),
+    client_email: clientEmail,
+    purpose,
   };
 }
 
@@ -245,8 +300,8 @@ async function createProject(ctx: Ctx) {
   const pm = (await memberOrNull(m, b.pm_id)) ?? ctx.user.id;
   const p = await one(
     `insert into projects (firm_id, name, number, address, jurisdiction, permit_number, kind, requirements,
-       engineer_name, engineer_email, pm_id, drafter_id, architect_id, engineer_id, created_by)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) returning *`,
+       engineer_name, engineer_email, pm_id, drafter_id, architect_id, engineer_id, created_by, client_name, client_email, purpose)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) returning *`,
     [
       m.firm_id, f.name, f.number, f.address, f.jurisdiction, f.permit_number, f.kind, f.requirements,
       f.engineer_name, f.engineer_email, pm,
@@ -254,6 +309,7 @@ async function createProject(ctx: Ctx) {
       (await memberOrNull(m, b.architect_id)) ?? (m.role === 'architect' ? ctx.user.id : null),
       await memberOrNull(m, b.engineer_id),
       ctx.user.id,
+      f.client_name, f.client_email, f.purpose,
     ],
   );
   await log(m, ctx.user, p!.id, null, 'project_created', f.name);
@@ -280,8 +336,17 @@ async function getProject(ctx: Ctx) {
     many(`select * from events where project_id = $1 and firm_id = $2 order by created_at desc limit 40`, [p.id, m.firm_id]),
     many(`select user_id, name, email, role, is_admin from memberships where firm_id = $1 order by name`, [m.firm_id]),
   ]);
-  const slots = [...slotsOf(p, m, ctx.user.id)];
-  return json({ project: p, sets, comments, events: redactEvents(events, slots), members, my_slots: slots });
+  const slotSet = slotsOf(p, m, ctx.user.id);
+  const slots = [...slotSet];
+  const vis = visiblePeople(p, slotSet, ctx.user.id);
+  return json({
+    project: redactProject(p, slotSet, vis),
+    sets,
+    comments,
+    events: redactPeople(redactEvents(events, slots), p, slotSet, vis, 'actor_name', 'actor_id'),
+    members: vis ? members.filter((x) => vis.has(x.user_id)) : members,
+    my_slots: slots,
+  });
 }
 
 /** Drafters work only with the PM: they don't see the architect's or engineer's return notes directly. */
@@ -303,13 +368,15 @@ async function updateProject(ctx: Ctx) {
   const drafterId = await assign('drafter_id');
   const row = await one(
     `update projects set name=$3, number=$4, address=$5, jurisdiction=$6, permit_number=$7, kind=$8, requirements=$9,
-       engineer_name=$10, engineer_email=$11, pm_id=$12, drafter_id=$13, architect_id=$14, engineer_id=$15, archived=$16
+       engineer_name=$10, engineer_email=$11, pm_id=$12, drafter_id=$13, architect_id=$14, engineer_id=$15, archived=$16,
+       client_name=$17, client_email=$18, purpose=$19
      where id = $1 and firm_id = $2 returning *`,
     [
       p.id, m.firm_id, f.name, f.number, f.address, f.jurisdiction, f.permit_number, f.kind, f.requirements,
       f.engineer_name, f.engineer_email, pmId, drafterId,
       await assign('architect_id'), await assign('engineer_id'),
       b.archived !== undefined ? !!b.archived : p.archived,
+      f.client_name, f.client_email, f.purpose,
     ],
   );
   if (drafterId !== p.drafter_id) await log(m, ctx.user, p.id, null, 'drafter_assigned', '');
@@ -318,32 +385,46 @@ async function updateProject(ctx: Ctx) {
 
 // ---------- revision sets ----------
 
+/**
+ * Starts the next revision. The architect (or PM) can start it at intake to share site notes and sketches;
+ * the PM can also send it straight to the drafter with the scope. With from_comments, the open city comments
+ * are tied to this round.
+ */
 async function createSet(ctx: Ctx) {
   const m = firmOf(ctx);
   const p = await loadProject(m, ctx.params[0], ctx.user.id);
-  if (!slotsOf(p, m, ctx.user.id).has('pm')) throw forbidden('The project manager starts each revision and sends it to the drafter.');
-  if (!p.drafter_id) throw bad('Assign a drafter to this project first.');
+  const slots = slotsOf(p, m, ctx.user.id);
+  if (!slots.has('pm') && !slots.has('architect')) throw forbidden('The architect or project manager starts each revision.');
+  const brief = str(ctx.body.brief, 8000);
+  const direct = slots.has('pm') && !ctx.body.intake;
+  if (direct && !p.drafter_id) throw bad('Assign a drafter to this project first.');
+  if (direct && !brief) throw bad('Write what the drafter needs to do.');
   const open = await one(
     `select rev_number from revision_sets where project_id = $1 and status <> 'sealed' limit 1`,
     [p.id],
   );
   if (open) throw bad(`Rev ${open.rev_number} is still in progress. Finish or seal it before starting a new revision.`);
-  const brief = str(ctx.body.brief, 8000);
+  const fromComments = !!ctx.body.from_comments;
   const s = await one(
-    `insert into revision_sets (firm_id, project_id, rev_number, title, brief, created_by)
-     select $1, $2, coalesce(max(rev_number) + 1, 0), $3, $4, $5 from revision_sets where project_id = $2
+    `insert into revision_sets (firm_id, project_id, rev_number, title, brief, created_by, status, reason)
+     select $1, $2, coalesce(max(rev_number) + 1, 0), $3, $4, $5, $6, $7 from revision_sets where project_id = $2
      returning *`,
-    [m.firm_id, p.id, str(ctx.body.title, 200), brief, ctx.user.id],
+    [m.firm_id, p.id, str(ctx.body.title, 200), brief, ctx.user.id, direct ? 'draft' : 'intake', fromComments ? 'city' : ''],
   );
-  await log(m, ctx.user, p.id, s!.id, 'sent_to_drafter', brief);
+  if (fromComments) {
+    await many(`update city_comments set round_set_id = $2 where project_id = $1 and status <> 'addressed' and round_set_id is null`, [p.id, s!.id]);
+  }
+  await log(m, ctx.user, p.id, s!.id, direct ? 'sent_to_drafter' : 'intake_started', direct ? brief : str(ctx.body.note, 4000));
   return json(s, 201);
 }
 
 async function updateSet(ctx: Ctx) {
   const m = firmOf(ctx);
   const { s, p } = await loadSet(m, ctx.params[0], ctx.user.id);
-  if (!slotsOf(p, m, ctx.user.id).has('pm')) throw forbidden();
+  const sl = slotsOf(p, m, ctx.user.id);
+  if (!sl.has('pm') && !(sl.has('architect') && s.status === 'intake')) throw forbidden();
   if (s.status === 'sealed') throw bad('This set is sealed.');
+  void p;
   const row = await one(`update revision_sets set title = $2, brief = $3 where id = $1 returning *`, [
     s.id,
     ctx.body.title !== undefined ? str(ctx.body.title, 200) : s.title,
@@ -355,9 +436,12 @@ async function updateSet(ctx: Ctx) {
 async function getSet(ctx: Ctx) {
   const m = firmOf(ctx);
   const { s, p } = await loadSet(m, ctx.params[0], ctx.user.id);
-  const slots = [...slotsOf(p, m, ctx.user.id)];
+  const slotSet = slotsOf(p, m, ctx.user.id);
+  const slots = [...slotSet];
   const onlyDrafter = slots.length === 1 && slots[0] === 'drafter';
-  const [fileRows, events, members, stamps] = await Promise.all([
+  const vis = visiblePeople(p, slotSet, ctx.user.id);
+  const sendsOut = slotSet.has('pm') || slotSet.has('architect');
+  const [fileRows, events, members, stamps, clientLinks] = await Promise.all([
     many(
       `select f.*, coalesce(mb.name, 'Engineer (email link)') as uploaded_by_name from files f
        left join memberships mb on mb.firm_id = f.firm_id and mb.user_id = f.uploaded_by
@@ -367,36 +451,59 @@ async function getSet(ctx: Ctx) {
     ),
     many(`select * from events where revision_set_id = $1 order by created_at desc`, [s.id]),
     many(`select user_id, name, email, role from memberships where firm_id = $1 order by name`, [m.firm_id]),
-    onlyDrafter
+    !sendsOut
       ? Promise.resolve([])
       : many(
           `select id, engineer_name, engineer_email, created_at, expires_at, used_at, revoked_at from stamp_requests
            where revision_set_id = $1 order by created_at desc`,
           [s.id],
         ),
+    !slotSet.has('pm')
+      ? Promise.resolve([])
+      : many(
+          `select id, client_name, client_email, created_at, expires_at, opened_at, revoked_at from client_links
+           where revision_set_id = $1 order by created_at desc`,
+          [s.id],
+        ),
   ]);
-  return json({ set: s, project: p, files: fileRows, events: redactEvents(events, slots), members, my_slots: slots, stamp_requests: stamps });
+  return json({
+    set: s,
+    project: redactProject(p, slotSet, vis),
+    files: redactPeople(fileRows, p, slotSet, vis, 'uploaded_by_name', 'uploaded_by'),
+    events: redactPeople(redactEvents(events, slots), p, slotSet, vis, 'actor_name', 'actor_id'),
+    members: vis ? members.filter((x) => vis.has(x.user_id)) : members,
+    my_slots: slots,
+    stamp_requests: stamps,
+    client_links: clientLinks,
+  });
 }
 
-const FILE_KINDS = ['pdf', 'dwg', 'sealed_pdf', 'reference', 'markup', 'other'];
+const FILE_KINDS = ['pdf', 'dwg', 'sealed_pdf', 'reference', 'markup', 'final_pdf', 'final_cad', 'other'];
 const MAX_BYTES = 500 * 1024 * 1024;
 
-/** Who may add which kind of file at which step. */
+/**
+ * Who may add which kind of file at which step. Review rounds are PDF only; the CAD source comes in with the
+ * final PDF for the record once the architect approves.
+ */
 function canUpload(kind: string, status: string, slots: Set<Slot>) {
   if (status === 'sealed') return false;
   switch (kind) {
     case 'pdf':
-    case 'dwg':
     case 'other':
       return (status === 'draft' && (slots.has('drafter') || slots.has('pm'))) ||
         (['pm_review', 'pm_rework'].includes(status) && slots.has('pm'));
+    case 'dwg':
+      return false;
     case 'reference':
-      return slots.has('pm');
+      return slots.has('pm') || (status === 'intake' && slots.has('architect'));
     case 'markup':
       return (status === 'architect_review' && slots.has('architect')) ||
         (['pm_review', 'pm_rework', 'architect_review'].includes(status) && slots.has('pm'));
+    case 'final_pdf':
+    case 'final_cad':
+      return status === 'final_record' && (slots.has('drafter') || slots.has('pm'));
     case 'sealed_pdf':
-      return status === 'engineer_review' && slots.has('engineer');
+      return status === 'engineer_review' && (slots.has('engineer') || slots.has('pm'));
   }
   return false;
 }
@@ -430,7 +537,9 @@ async function startUpload(ctx: Ctx) {
   if (!FILE_KINDS.includes(kind)) throw bad('Unknown file type.');
   const slots = slotsOf(p, m, ctx.user.id);
   if (!canUpload(kind, s.status, slots)) {
-    if (kind === 'sealed_pdf') throw forbidden('Only the project engineer uploads the sealed set, once it is ready for stamp.');
+    if (kind === 'sealed_pdf') throw forbidden('The engineer (or the PM, for a stamp received by email) uploads the sealed set once it is ready for stamp.');
+    if (kind === 'final_pdf' || kind === 'final_cad') throw bad('The final PDF and CAD files go in after the architect approves the set.');
+    if (kind === 'dwg') throw bad('Review rounds are PDF only. Upload the CAD files with the final PDF after the architect approves.');
     if (kind === 'markup') throw forbidden('Markups come from the architect or PM during review.');
     throw bad('Drawings are locked at this step. They open again when the set is back with the drafter.');
   }
@@ -446,7 +555,8 @@ async function finishUpload(ctx: Ctx) {
   if (!f) throw notFound('File not found');
   if (f.uploaded_by !== ctx.user.id) throw forbidden();
   await completeFile(f);
-  await log(m, ctx.user, f.project_id, f.revision_set_id, f.kind === 'sealed_pdf' ? 'sealed_uploaded' : f.kind === 'markup' ? 'markup_uploaded' : 'file_uploaded', f.filename);
+  const ev = f.kind === 'sealed_pdf' ? 'sealed_uploaded' : f.kind === 'markup' ? 'markup_uploaded' : f.kind === 'final_pdf' || f.kind === 'final_cad' ? 'final_uploaded' : 'file_uploaded';
+  await log(m, ctx.user, f.project_id, f.revision_set_id, ev, f.filename);
   return json({ ok: true });
 }
 
@@ -485,22 +595,30 @@ async function deleteFile(ctx: Ctx) {
 }
 
 /**
- * The review loop. draft (drafter) -> pm_review (PM) -> architect_review (architect) -> engineer_review -> sealed.
+ * The workflow. intake (architect's site notes, PM sets the scope) -> draft (drafter) -> pm_review (PM) ->
+ * architect_review -> final_record (drafter uploads final PDF + CAD) -> engineer_review (ready for stamp) -> sealed.
  * The PM can send work back to the drafter; the architect and engineer send markups back to the PM (pm_rework),
  * and the PM either forwards them to the drafter or resubmits to the architect.
  */
-const STEPS: Record<string, { from: string[]; slot: Slot; to: string; event: string; note?: boolean }> = {
-  submit: { from: ['draft'], slot: 'drafter', to: 'pm_review', event: 'submitted' },
-  pm_approve: { from: ['pm_review'], slot: 'pm', to: 'architect_review', event: 'pm_approved' },
-  pm_return: { from: ['pm_review'], slot: 'pm', to: 'draft', event: 'pm_returned', note: true },
-  pm_send_back: { from: ['pm_rework'], slot: 'pm', to: 'draft', event: 'pm_returned', note: true },
-  pm_resubmit: { from: ['pm_rework'], slot: 'pm', to: 'architect_review', event: 'pm_approved' },
-  architect_approve: { from: ['architect_review'], slot: 'architect', to: 'engineer_review', event: 'architect_approved' },
-  architect_return: { from: ['architect_review'], slot: 'architect', to: 'pm_rework', event: 'architect_returned', note: true },
-  engineer_return: { from: ['engineer_review'], slot: 'engineer', to: 'pm_rework', event: 'engineer_returned', note: true },
-  seal: { from: ['engineer_review'], slot: 'engineer', to: 'sealed', event: 'sealed' },
+const STEPS: Record<string, { from: string[]; slots: Slot[]; to: string; event: string; note?: boolean }> = {
+  send_to_drafter: { from: ['intake'], slots: ['pm'], to: 'draft', event: 'sent_to_drafter' },
+  submit: { from: ['draft'], slots: ['drafter'], to: 'pm_review', event: 'submitted' },
+  pm_approve: { from: ['pm_review'], slots: ['pm'], to: 'architect_review', event: 'pm_approved' },
+  pm_return: { from: ['pm_review'], slots: ['pm'], to: 'draft', event: 'pm_returned', note: true },
+  pm_send_back: { from: ['pm_rework'], slots: ['pm'], to: 'draft', event: 'pm_returned', note: true },
+  pm_resubmit: { from: ['pm_rework'], slots: ['pm'], to: 'architect_review', event: 'pm_approved' },
+  architect_approve: { from: ['architect_review'], slots: ['architect'], to: 'final_record', event: 'architect_approved' },
+  architect_return: { from: ['architect_review'], slots: ['architect'], to: 'pm_rework', event: 'architect_returned', note: true },
+  submit_final: { from: ['final_record'], slots: ['drafter', 'pm'], to: 'engineer_review', event: 'final_submitted' },
+  engineer_return: { from: ['engineer_review'], slots: ['engineer'], to: 'pm_rework', event: 'engineer_returned', note: true },
+  seal: { from: ['engineer_review'], slots: ['engineer', 'pm'], to: 'sealed', event: 'sealed' },
 };
 const SLOT_NAME: Record<Slot, string> = { pm: 'the project manager', drafter: 'the assigned drafter', architect: 'the project architect', engineer: 'the project engineer' };
+
+async function countFiles(setId: string, kind: string) {
+  const c = await one(`select count(*)::int as n from files where revision_set_id = $1 and kind = $2 and status = 'ready'`, [setId, kind]);
+  return c?.n ?? 0;
+}
 
 async function setAction(ctx: Ctx) {
   const m = firmOf(ctx);
@@ -510,25 +628,36 @@ async function setAction(ctx: Ctx) {
   if (!step) throw bad('Unknown action.');
   if (!step.from.includes(s.status)) throw bad('That step is not available for this set right now.');
   const slots = slotsOf(p, m, ctx.user.id);
-  if (!slots.has(step.slot)) throw forbidden(`This step is for ${SLOT_NAME[step.slot]}.`);
+  if (!step.slots.some((x) => slots.has(x))) throw forbidden(`This step is for ${SLOT_NAME[step.slots[0]]}.`);
   const note = str(ctx.body.note, 4000);
   if (step.note && !note) throw bad('Say what needs to change.');
 
-  if (action === 'submit') {
-    const c = await one(`select count(*)::int as n from files where revision_set_id = $1 and kind = 'pdf' and status = 'ready'`, [s.id]);
-    if (!c || c.n === 0) throw bad('Upload at least one PDF sheet before submitting.');
+  let seal: { by: string; name: string; via: string; license: string } | null = null;
+  if (action === 'send_to_drafter') {
+    if (!p.drafter_id) throw bad('Assign a drafter to this project first.');
+    const brief = note || s.brief;
+    if (!brief) throw bad('Write the scope for the drafter.');
+    await many(`update revision_sets set brief = $2 where id = $1`, [s.id, brief]);
+  }
+  if (action === 'submit' && !(await countFiles(s.id, 'pdf'))) throw bad('Upload at least one PDF sheet before submitting.');
+  if (action === 'submit_final') {
+    if (!(await countFiles(s.id, 'final_pdf'))) throw bad('Upload the final PDF set first.');
+    if (!(await countFiles(s.id, 'final_cad'))) throw bad('Upload the final CAD files first.');
   }
   if (action === 'seal') {
-    const c = await one(`select count(*)::int as n from files where revision_set_id = $1 and kind = 'sealed_pdf' and status = 'ready'`, [s.id]);
-    if (!c || c.n === 0) throw bad('Upload the signed and sealed PDF first.');
+    if (!(await countFiles(s.id, 'sealed_pdf'))) throw bad('Upload the signed and sealed PDF first.');
+    const byEngineer = slots.has('engineer');
+    const engineerName = byEngineer ? ctx.user.name : str(ctx.body.engineer_name, 120) || p.engineer_name;
+    if (!engineerName) throw bad('Enter the name of the engineer who stamped it.');
+    seal = { by: ctx.user.id, name: engineerName, via: byEngineer ? 'app' : 'manual', license: str(ctx.body.license, 60) };
   }
 
-  const row = await transition(s, step.to, step.to === 'sealed' ? { by: ctx.user.id, name: ctx.user.name, via: 'app', license: str(ctx.body.license, 60) } : null);
+  const row = await transition(s, step.to, seal);
   if (action === 'pm_send_back') {
     // Forwarding to the drafter shares the architect's markups with them.
     await many(`update files set shared_with_drafter = true where revision_set_id = $1 and kind = 'markup'`, [s.id]);
   }
-  await log(m, ctx.user, s.project_id, s.id, step.event, note);
+  await log(m, ctx.user, s.project_id, s.id, step.event, action === 'send_to_drafter' ? note || s.brief : action === 'seal' && seal?.via === 'manual' ? `Stamped by ${seal.name}, received by email` : note);
   return json(row);
 }
 
@@ -562,7 +691,7 @@ async function createStampLink(ctx: Ctx) {
   const { s, p } = await loadSet(m, ctx.params[0], ctx.user.id);
   const slots = slotsOf(p, m, ctx.user.id);
   if (!slots.has('pm') && !slots.has('architect')) throw forbidden('The PM or architect sends the set out for stamp.');
-  if (s.status !== 'engineer_review') throw bad('The set is sent for stamp after the architect approves it.');
+  if (s.status !== 'engineer_review') throw bad('The set is sent for stamp once the final PDF and CAD files are in.');
   const email = str(ctx.body.email, 200).toLowerCase();
   const name = str(ctx.body.name, 120);
   if (!EMAIL.test(email)) throw bad("Enter the engineer's email.");
@@ -618,7 +747,7 @@ async function publicStamp(req: Request, path: string, method: string, body: any
   if (method === 'GET' && rest === '') {
     const list = await many(
       `select id, kind, sheet, filename, size_bytes, sha256 from files
-       where revision_set_id = $1 and status = 'ready' and (kind in ('pdf','dwg','other') or (kind = 'sealed_pdf' and uploaded_by = $2))
+       where revision_set_id = $1 and status = 'ready' and (kind in ('final_pdf','final_cad') or (kind = 'sealed_pdf' and uploaded_by = $2))
        order by kind, sheet, filename`,
       [r.revision_set_id, `stamp:${r.id}`],
     );
@@ -637,7 +766,7 @@ async function publicStamp(req: Request, path: string, method: string, body: any
   const fm = rest.match(/^files\/([0-9a-f-]{36})$/);
   if (method === 'GET' && fm) {
     const f = await one(
-      `select * from files where id = $1 and revision_set_id = $2 and status = 'ready' and (kind in ('pdf','dwg','other') or uploaded_by = $3)`,
+      `select * from files where id = $1 and revision_set_id = $2 and status = 'ready' and (kind in ('final_pdf','final_cad') or uploaded_by = $3)`,
       [fm[1], r.revision_set_id, `stamp:${r.id}`],
     );
     if (!f) throw notFound('File not found');
@@ -683,6 +812,87 @@ async function publicStamp(req: Request, path: string, method: string, body: any
   return json({ error: 'Not found' }, 404);
 }
 
+// ---------- client delivery links (no account needed) ----------
+
+const CLIENT_DAYS = 30;
+
+async function createClientLink(ctx: Ctx) {
+  const m = firmOf(ctx);
+  const { s, p } = await loadSet(m, ctx.params[0], ctx.user.id);
+  if (!slotsOf(p, m, ctx.user.id).has('pm')) throw forbidden('The project manager sends the stamped set to the client.');
+  if (s.status !== 'sealed') throw bad('The client gets the set once it is stamped and sealed.');
+  const email = str(ctx.body.email, 200).toLowerCase();
+  const name = str(ctx.body.name, 120);
+  if (!EMAIL.test(email)) throw bad("Enter the client's email.");
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  const token = btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  await many(`update client_links set revoked_at = now() where revision_set_id = $1 and revoked_at is null`, [s.id]);
+  const r = await one(
+    `insert into client_links (firm_id, project_id, revision_set_id, token_hash, client_name, client_email, created_by, expires_at)
+     values ($1,$2,$3,$4,$5,$6,$7, now() + interval '${CLIENT_DAYS} days') returning id, expires_at`,
+    [m.firm_id, p.id, s.id, await sha256Hex(token), name, email, ctx.user.id],
+  );
+  if (!p.client_email) {
+    await many(`update projects set client_email = $2, client_name = coalesce(nullif(client_name, ''), $3) where id = $1`, [p.id, email, name]);
+  }
+  await many(`update revision_sets set delivered_at = coalesce(delivered_at, now()) where id = $1`, [s.id]);
+  await log(m, ctx.user, p.id, s.id, 'client_link_sent', name ? `${name} <${email}>` : email);
+  const origin = new URL(ctx.req.url).origin;
+  return json({ id: r!.id, url: `${origin}/d/${token}`, expires_at: r!.expires_at }, 201);
+}
+
+async function revokeClientLink(ctx: Ctx) {
+  const m = firmOf(ctx);
+  const r = await one(`select project_id from client_links where id = $1 and firm_id = $2`, [ctx.params[0], m.firm_id]);
+  if (!r) throw notFound('Link not found');
+  const p = await loadProject(m, r.project_id, ctx.user.id);
+  if (!slotsOf(p, m, ctx.user.id).has('pm')) throw forbidden();
+  await many(`update client_links set revoked_at = now() where id = $1`, [ctx.params[0]]);
+  return json({ ok: true });
+}
+
+async function publicDelivery(path: string, method: string): Promise<Response> {
+  const mm = path.match(/^\/public\/delivery\/([\w-]{20,64})(?:\/files\/([0-9a-f-]{36}))?$/);
+  if (!mm || method !== 'GET') return json({ error: 'Not found' }, 404);
+  const r = await one(
+    `select c.*, s.rev_number, s.title, s.sealed_at, s.sealed_by_name, s.engineer_license,
+       p.name as project_name, p.number as project_number, p.address, p.jurisdiction, f.name as firm_name
+     from client_links c
+     join revision_sets s on s.id = c.revision_set_id
+     join projects p on p.id = c.project_id
+     join firms f on f.id = c.firm_id
+     where c.token_hash = $1 and p.deleted_at is null`,
+    [await sha256Hex(mm[1])],
+  );
+  if (!r || r.revoked_at) throw notFound('This link is no longer active. Ask the firm for a new one.');
+  if (new Date(r.expires_at).getTime() < Date.now()) throw notFound('This link has expired. Ask the firm for a new one.');
+  if (mm[2]) {
+    const f = await one(`select * from files where id = $1 and revision_set_id = $2 and kind = 'sealed_pdf' and status = 'ready'`, [mm[2], r.revision_set_id]);
+    if (!f) throw notFound('File not found');
+    return json({ url: await files().downloadUrl(f.storage_key, f.filename) });
+  }
+  if (!r.opened_at) {
+    await many(`update client_links set opened_at = now() where id = $1`, [r.id]);
+    await log({ firm_id: r.firm_id }, { id: `client:${r.id}`, name: r.client_name || r.client_email }, r.project_id, r.revision_set_id, 'client_opened', '');
+  }
+  const list = await many(
+    `select id, filename, size_bytes, sha256 from files where revision_set_id = $1 and kind = 'sealed_pdf' and status = 'ready' order by filename`,
+    [r.revision_set_id],
+  );
+  return json({
+    firm_name: r.firm_name,
+    client_name: r.client_name,
+    project: { name: r.project_name, number: r.project_number, address: r.address, jurisdiction: r.jurisdiction },
+    rev_number: r.rev_number,
+    title: r.title,
+    sealed_at: r.sealed_at,
+    sealed_by_name: r.sealed_by_name,
+    engineer_license: r.engineer_license,
+    expires_at: r.expires_at,
+    files: list,
+  });
+}
+
 // ---------- deleting projects ----------
 
 export const TRASH_DAYS = 30;
@@ -699,6 +909,7 @@ async function deleteProject(ctx: Ctx) {
   await many(`update projects set deleted_at = now(), deleted_by = $2 where id = $1`, [p.id, ctx.user.id]);
   // Any outstanding stamp links stop working with the project.
   await many(`update stamp_requests set revoked_at = now() where project_id = $1 and used_at is null and revoked_at is null`, [p.id]);
+  await many(`update client_links set revoked_at = now() where project_id = $1 and revoked_at is null`, [p.id]);
   await log(m, ctx.user, p.id, null, 'project_deleted', p.name);
   return json({ ok: true, purge_after_days: TRASH_DAYS });
 }
@@ -892,6 +1103,8 @@ const routes: [string, RegExp, Handler][] = [
   ['POST', new RegExp(`^/sets/${ID}/action$`), setAction],
   ['POST', new RegExp(`^/sets/${ID}/stamp-links$`), createStampLink],
   ['DELETE', new RegExp(`^/stamp-links/${ID}$`), revokeStampLink],
+  ['POST', new RegExp(`^/sets/${ID}/client-links$`), createClientLink],
+  ['DELETE', new RegExp(`^/client-links/${ID}$`), revokeClientLink],
   ['POST', new RegExp(`^/files/${ID}/complete$`), finishUpload],
   ['GET', new RegExp(`^/files/${ID}/download$`), downloadFile],
   ['DELETE', new RegExp(`^/files/${ID}$`), deleteFile],
@@ -917,6 +1130,7 @@ export async function handle(req: Request): Promise<Response> {
 
     // Engineer stamp links work without an account; the token in the URL is the credential.
     if (path.startsWith('/public/stamp/')) return await publicStamp(req, path, req.method, await readBody(req));
+    if (path.startsWith('/public/delivery/')) return await publicDelivery(path, req.method);
 
     let matched: { h: Handler; params: string[] } | null = null;
     let pathMatched = false;

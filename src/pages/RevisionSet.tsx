@@ -2,16 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api, download, uploadFile } from '../api';
 import { useSession } from '../App';
-import { Avatar, Icon, NOTE_EVENTS, Pill, SET_STATUS, eventText, fmtBytes, fmtDate, timeAgo, useToast } from '../ui';
+import { Avatar, Icon, NOTE_EVENTS, Pill, SET_STATUS, eventText, fmtBytes, fmtDate, kindLabel, timeAgo, useToast } from '../ui';
 
-type Data = { set: any; project: any; files: any[]; events: any[]; members: any[]; my_slots: string[]; stamp_requests: any[] };
+type Data = { set: any; project: any; files: any[]; events: any[]; members: any[]; my_slots: string[]; stamp_requests: any[]; client_links: any[] };
 type Pending = { name: string; pct: number; error?: string };
 
 const SHEET_RE = /\b([A-Z]{1,2}-?\d{1,3}(?:\.\d{1,2})?[A-Z]?)\b/;
 const guessSheet = (filename: string) => filename.replace(/\.[^.]+$/, '').toUpperCase().replace(/_/g, ' ').match(SHEET_RE)?.[1] || '';
 const kindOf = (filename: string) => {
   const ext = filename.toLowerCase().split('.').pop();
-  return ext === 'pdf' ? 'pdf' : ext === 'dwg' ? 'dwg' : 'other';
+  return ext === 'pdf' ? 'pdf' : 'other';
 };
 
 export default function SetPage() {
@@ -41,8 +41,9 @@ export default function SetPage() {
   }, [d?.set.id, d?.project.name]);
 
   const byKind = useMemo(() => {
-    const g: Record<string, any[]> = { drawings: [], reference: [], markup: [], sealed_pdf: [] };
-    for (const f of d?.files || []) (g[['pdf', 'dwg', 'other'].includes(f.kind) ? 'drawings' : f.kind] ||= []).push(f);
+    const g: Record<string, any[]> = { drawings: [], reference: [], markup: [], sealed_pdf: [], final: [] };
+    for (const f of d?.files || [])
+      (g[['pdf', 'dwg', 'other'].includes(f.kind) ? 'drawings' : ['final_pdf', 'final_cad'].includes(f.kind) ? 'final' : f.kind] ||= []).push(f);
     return g;
   }, [d]);
   const sheets = useMemo(() => {
@@ -63,7 +64,10 @@ export default function SetPage() {
   const st = set.status;
   const drawingsOpen = (st === 'draft' && (slots.has('drafter') || slots.has('pm'))) || (['pm_review', 'pm_rework'].includes(st) && slots.has('pm'));
   const canMarkup = (st === 'architect_review' && slots.has('architect')) || (['pm_review', 'pm_rework', 'architect_review'].includes(st) && slots.has('pm'));
-  const canRef = st !== 'sealed' && slots.has('pm');
+  const canRef = st !== 'sealed' && (slots.has('pm') || (st === 'intake' && slots.has('architect')));
+  const finalOpen = st === 'final_record' && (slots.has('drafter') || slots.has('pm'));
+  const hasDwg = byKind.drawings.some((f) => f.kind === 'dwg');
+  const intakeNote = [...d.events].reverse().find((e) => e.action === 'intake_started' && e.note);
 
   async function upload(list: FileList | File[], kind?: string) {
     const arr = [...list];
@@ -101,10 +105,12 @@ export default function SetPage() {
           pm_return: 'Sent back to the drafter.',
           pm_send_back: 'Sent back to the drafter with the markups.',
           pm_resubmit: 'Sent back to the architect.',
-          architect_approve: 'Approved. Ready for stamp.',
+          architect_approve: 'Approved. The drafter turns in the final PDF and CAD next.',
+          send_to_drafter: 'Scope sent to the drafter.',
+          submit_final: 'Final record turned in. Ready for stamp.',
           architect_return: 'Markups sent to the PM.',
           engineer_return: 'Sent back to the PM.',
-          seal: 'Sealed. This set is now locked.',
+          seal: 'Sealed. This set is now locked. Send it to the client next.',
         } as Record<string, string>)[action] || 'Done.',
       );
     } catch (e: any) {
@@ -124,13 +130,16 @@ export default function SetPage() {
   }
 
   const steps: [string, string, string[]][] = [
+    ['Intake', set.reason === 'city' ? 'City comments' : 'Site notes and scope', ['intake']],
     ['Drafting', name(p.drafter_id) || 'Drafter', ['draft']],
     ['PM check', name(p.pm_id) || 'PM', ['pm_review', 'pm_rework']],
     ['Architect review', name(p.architect_id) || 'Architect', ['architect_review']],
+    ['Final record', 'Final PDF and CAD', ['final_record']],
     ['Engineer stamp', name(p.engineer_id) || p.engineer_name || p.engineer_email || 'Engineer', ['engineer_review']],
-    ['Sealed', 'Locked to its CAD source', ['sealed']],
+    ['Client', set.delivered_at ? `Sent ${fmtDate(set.delivered_at)}` : 'Stamped set delivered', ['sealed']],
   ];
   const at = steps.findIndex((x) => x[2].includes(st));
+  const last = steps.length - 1;
   const lastNote = (actions: string[]) => d.events.find((e) => actions.includes(e.action) && e.note);
 
   return (
@@ -142,7 +151,9 @@ export default function SetPage() {
           <p className="hint">
             {st === 'sealed'
               ? `Sealed ${fmtDate(set.sealed_at)}${set.sealed_by_name ? ` by ${set.sealed_by_name}` : ''}${set.sealed_via === 'link' ? ' through the email link' : ''}. The drawings and their fingerprints are locked.`
-              : 'Name files with the sheet number, like A-101.pdf and A-101.dwg, so each PDF pairs with its DWG source.'}
+              : st === 'intake'
+                ? 'Collect the site notes, sketches and photos here. The PM writes the scope and sends it to the drafter.'
+                : 'Review rounds are PDF only. Name each PDF with its sheet number, like A-101.pdf. The CAD files come in with the final record.'}
           </p>
         </div>
         <Pill kind={`st-${st}`}>{SET_STATUS[st]}</Pill>
@@ -151,10 +162,10 @@ export default function SetPage() {
       <section className="card">
         <div className="chain">
           {steps.map(([t, who], n) => (
-            <div key={t} className={`step ${st === 'sealed' ? (n === 4 ? 'sealed' : 'done') : n < at ? 'done' : n === at ? (st === 'pm_rework' ? 'back' : 'now') : ''}`}>
+            <div key={t} className={`step ${st === 'sealed' ? (n === last ? (set.delivered_at ? 'sealed' : 'now') : 'done') : n < at ? 'done' : n === at ? (st === 'pm_rework' ? 'back' : 'now') : ''}`}>
               <div className="dot" />
               <div className="t">{t}</div>
-              <div className="d">{n === 1 && st === 'pm_rework' ? 'Rework from review' : who}</div>
+              <div className="d">{n === 2 && st === 'pm_rework' ? 'Rework from review' : who}</div>
             </div>
           ))}
         </div>
@@ -162,46 +173,57 @@ export default function SetPage() {
 
       <ActionBox d={d} slots={slots} note={note} setNote={setNote} busy={busy} act={act} upload={upload} lastNote={lastNote} name={name} reload={load} />
 
-      {set.brief && (
+      {(set.brief || intakeNote || st === 'intake' || byKind.reference.length > 0) && (
         <section className="card">
-          <div className="card-h"><h2>Instructions from the PM</h2><span className="hint">{name(set.created_by) || ''}</span></div>
-          <div className="brief">{set.brief}</div>
+          <div className="card-h"><h2>{st === 'intake' ? 'Intake' : 'Scope and instructions'}</h2></div>
+          {intakeNote && (
+            <div style={{ marginBottom: 12 }}>
+              <div className="label" style={{ marginBottom: 8 }}>Site notes from {intakeNote.actor_name}</div>
+              <div className="brief">{intakeNote.note}</div>
+            </div>
+          )}
+          {set.brief ? (
+            <>
+              <div className="label" style={{ marginBottom: 8 }}>Scope from {name(p.pm_id) || 'the PM'}</div>
+              <div className="brief">{set.brief}</div>
+            </>
+          ) : st === 'intake' ? <div className="hint">The PM hasn't written the scope yet.</div> : null}
           {byKind.reference.length > 0 && (
             <div style={{ marginTop: 12 }}>
-              <div className="label" style={{ marginBottom: 8 }}>Reference drawings</div>
+              <div className="label" style={{ marginBottom: 8 }}>Sketches, photos and reference drawings</div>
               <FileCells files={byKind.reference} editable={canRef} onRemove={removeFile} missing="" />
             </div>
           )}
-          {canRef && <div style={{ marginTop: 12 }}><DropZone onFiles={(f) => upload(f, 'reference')} label="Add reference drawings or photos:" accept="*" compact /></div>}
+          {canRef && <div style={{ marginTop: 12 }}><DropZone onFiles={(f) => upload(f, 'reference')} label="Add hand sketches, site photos or reference drawings:" accept="*" compact /></div>}
         </section>
       )}
 
-      <div className="grid2">
+      <div className={st === 'intake' ? 'col' : 'grid2'} style={st === 'intake' ? { gap: 22 } : undefined}>
         <div className="col" style={{ gap: 22 }}>
-          <section className="card">
+          {st !== 'intake' && <section className="card">
             <div className="card-h">
               <h2>Sheets</h2>
-              <span className="hint">{byKind.drawings.filter((f) => f.kind === 'pdf').length} PDF · {byKind.drawings.filter((f) => f.kind === 'dwg').length} DWG</span>
+              <span className="hint">{byKind.drawings.filter((f) => f.kind === 'pdf').length} PDF{hasDwg ? ` · ${byKind.drawings.filter((f) => f.kind === 'dwg').length} DWG` : ''}</span>
             </div>
-            {drawingsOpen && <DropZone onFiles={(fl) => upload(fl)} label="Drop PDF and DWG files here, or" accept=".pdf,.dwg,.dxf" />}
+            {drawingsOpen && <DropZone onFiles={(fl) => upload(fl)} label="Drop PDF sheets here, or" accept=".pdf" />}
             {pending.length > 0 && <Progress items={pending} onClear={() => setPending([])} />}
             {sheets.length === 0 ? (
               <div className="empty" style={{ marginTop: drawingsOpen ? 14 : 0 }}>No drawings uploaded yet.</div>
             ) : (
               <table className="ftable" style={{ marginTop: 14 }}>
-                <thead><tr><th>Sheet</th><th>PDF</th><th>DWG source</th></tr></thead>
+                <thead><tr><th>Sheet</th><th>PDF</th>{hasDwg && <th>DWG source</th>}</tr></thead>
                 <tbody>
                   {sheets.map(([sheet, g]) => (
                     <tr key={sheet || 'none'}>
                       <td className="mono" style={{ whiteSpace: 'nowrap' }}>{sheet || <span className="hint">No sheet no.</span>}</td>
                       <td><FileCells files={[...g.pdf, ...g.other]} editable={drawingsOpen} onRemove={removeFile} missing="No PDF" /></td>
-                      <td><FileCells files={g.dwg} editable={drawingsOpen} onRemove={removeFile} missing={sheet ? 'Missing DWG' : ''} /></td>
+                      {hasDwg && <td><FileCells files={g.dwg} editable={false} onRemove={removeFile} missing="" /></td>}
                     </tr>
                   ))}
                 </tbody>
               </table>
             )}
-          </section>
+          </section>}
           {(byKind.markup.length > 0 || canMarkup) && (
             <section className="card">
               <div className="card-h">
@@ -216,10 +238,30 @@ export default function SetPage() {
               {canMarkup && <div style={{ marginTop: 12 }}><DropZone onFiles={(f) => upload(f, 'markup')} label="Add a marked-up PDF:" accept=".pdf,image/*" compact /></div>}
             </section>
           )}
+          {(finalOpen || byKind.final.length > 0) && (
+            <section className="card">
+              <div className="card-h">
+                <h2>Final record</h2>
+                <span className="hint">The final PDF and CAD files kept with this revision.</span>
+              </div>
+              <div className="form-grid">
+                <div className="col" style={{ gap: 8 }}>
+                  <div className="label">Final PDF</div>
+                  <FileCells files={byKind.final.filter((f) => f.kind === 'final_pdf')} editable={finalOpen} onRemove={removeFile} missing="Not uploaded" />
+                  {finalOpen && <DropZone onFiles={(f) => upload(f, 'final_pdf')} label="Final PDF set:" accept=".pdf" compact />}
+                </div>
+                <div className="col" style={{ gap: 8 }}>
+                  <div className="label">CAD files</div>
+                  <FileCells files={byKind.final.filter((f) => f.kind === 'final_cad')} editable={finalOpen} onRemove={removeFile} missing="Not uploaded" />
+                  {finalOpen && <DropZone onFiles={(f) => upload(f, 'final_cad')} label="DWG, DXF or RVT:" accept="*" compact />}
+                </div>
+              </div>
+            </section>
+          )}
           {byKind.sealed_pdf.length > 0 && (
             <section className="card sealbox">
               <h2>Sealed set</h2>
-              <FileCells files={byKind.sealed_pdf} editable={st === 'engineer_review' && slots.has('engineer')} onRemove={removeFile} missing="" />
+              <FileCells files={byKind.sealed_pdf} editable={st === 'engineer_review' && (slots.has('engineer') || slots.has('pm'))} onRemove={removeFile} missing="" />
               {set.engineer_license && <div className="hint" style={{ marginTop: 8 }}>License {set.engineer_license}</div>}
             </section>
           )}
@@ -260,6 +302,10 @@ function ActionBox(props: {
   const { set, project: p } = d;
   const st = set.status;
   const [license, setLicense] = useState('');
+  const [scope, setScope] = useState(set.brief || (set.rev_number === 0 ? p.requirements : '') || '');
+  const [engineerName, setEngineerName] = useState(p.engineer_name || '');
+  const finals = d.files.filter((f) => f.kind === 'final_pdf').length;
+  const cads = d.files.filter((f) => f.kind === 'final_cad').length;
   const sealedFiles = d.files.filter((f) => f.kind === 'sealed_pdf');
   const pdfs = d.files.filter((f) => f.kind === 'pdf').length;
   const noteBox = (placeholder: string, rows = 70) => (
@@ -269,9 +315,47 @@ function ActionBox(props: {
 
   if (st === 'sealed')
     return (
-      <section className="card sealbox row">
-        <Icon name="seal" size={22} />
-        <div><b>Sealed and locked.</b> <span className="hint">When the city responds, the PM sends the next revision from the project page.</span></div>
+      <>
+        <section className="card sealbox row">
+          <Icon name="seal" size={22} />
+          <div>
+            <b>Sealed and locked.</b>{' '}
+            <span className="hint">
+              {slots.has('pm')
+                ? 'Send the stamped set to the client below. When city comments come back, log them on the project page to start the next round.'
+                : 'When city comments come back, the PM starts the next revision.'}
+            </span>
+          </div>
+        </section>
+        {slots.has('pm') && <ClientLink d={d} reload={reload} />}
+      </>
+    );
+
+  if (st === 'intake' && slots.has('pm'))
+    return (
+      <section className="card actionbox col">
+        <div><b>Set the scope.</b> <span className="hint">Review the site notes and sketches below, then tell {name(p.drafter_id) || 'the drafter'} what to draw.</span></div>
+        <textarea className="input" style={{ minHeight: 120 }} placeholder="What to draw, for permit or for sale, standards to follow, due date." value={scope} onChange={(e) => setScope(e.target.value)} />
+        <div className="row">
+          <button className="btn primary" disabled={busy || !scope.trim() || !p.drafter_id} onClick={() => act('send_to_drafter', { note: scope })}><Icon name="check" /> Send scope to drafter</button>
+          {!p.drafter_id && <span className="hint">Assign a drafter on the project page first.</span>}
+        </div>
+      </section>
+    );
+
+  if (st === 'intake' && slots.has('architect'))
+    return (
+      <section className="card actionbox">
+        <b>Add your hand sketches, site photos and notes below.</b> <span className="hint">{name(p.pm_id) || 'The PM'} will set the scope and send it to the drafter.</span>
+      </section>
+    );
+
+  if (st === 'final_record' && (slots.has('drafter') || slots.has('pm')))
+    return (
+      <section className="card actionbox col">
+        <div><b>Approved. Turn in the final record.</b> <span className="hint">Upload the final PDF set and the CAD files below. They're kept with this revision and go to the engineer for stamp.</span></div>
+        <div className="hint">{finals ? `${finals} final PDF` : 'No final PDF yet'} · {cads ? `${cads} CAD file${cads === 1 ? '' : 's'}` : 'no CAD files yet'}</div>
+        <div className="row"><button className="btn primary" disabled={busy || !finals || !cads} onClick={() => act('submit_final')}><Icon name="check" /> Turn in final record</button></div>
       </section>
     );
 
@@ -348,6 +432,23 @@ function ActionBox(props: {
           </section>
         )}
         {sender && <StampLink d={d} reload={reload} />}
+        {slots.has('pm') && !inApp && (
+          <section className="card col">
+            <div><b>Got the stamp by email?</b> <span className="hint">Upload the stamped PDF yourself and record who stamped it.</span></div>
+            {sealedFiles.length === 0 ? (
+              <DropZone onFiles={(f) => upload(f, 'sealed_pdf')} label="Stamped PDF:" accept=".pdf" compact />
+            ) : (
+              <div className="hint">Stamped PDF uploaded: {sealedFiles.map((f) => f.filename).join(', ')}</div>
+            )}
+            <div className="form-grid">
+              <label className="field"><span>Engineer who stamped it</span><input className="input" value={engineerName} onChange={(e) => setEngineerName(e.target.value)} /></label>
+              <label className="field"><span>License number (optional)</span><input className="input" value={license} onChange={(e) => setLicense(e.target.value)} /></label>
+            </div>
+            <div className="row">
+              <button className="btn seal" disabled={busy || sealedFiles.length === 0 || !engineerName.trim()} onClick={() => act('seal', { license, engineer_name: engineerName })}><Icon name="lock" /> Record the stamp and lock the set</button>
+            </div>
+          </section>
+        )}
         {!inApp && !sender && (
           <section className="card"><b>Waiting on the engineer's stamp.</b></section>
         )}
@@ -356,6 +457,8 @@ function ActionBox(props: {
   }
 
   const waitingOn: Record<string, string | undefined> = {
+    intake: name(p.pm_id) || 'the PM',
+    final_record: name(p.drafter_id) || 'the drafter',
     draft: name(p.drafter_id) || 'the drafter',
     pm_review: name(p.pm_id) || 'the PM',
     pm_rework: name(p.pm_id) || 'the PM',
@@ -464,13 +567,107 @@ function StampLink({ d, reload }: { d: Data; reload: () => void }) {
   );
 }
 
+/** Send the stamped set to the client: a private download link in a Gmail draft. */
+function ClientLink({ d, reload }: { d: Data; reload: () => void }) {
+  const toast = useToast();
+  const p = d.project;
+  const [email, setEmail] = useState(p.client_email || '');
+  const [name, setName] = useState(p.client_name || '');
+  const [link, setLink] = useState('');
+  const [busy, setBusy] = useState(false);
+  const live = d.client_links.find((r) => !r.revoked_at && new Date(r.expires_at) > new Date());
+
+  function compose(url: string) {
+    const subject = `Stamped drawings: ${p.name}${p.number ? ` (${p.number})` : ''}, Rev ${d.set.rev_number}`;
+    const body = [
+      `Hi ${name || 'there'},`,
+      '',
+      `The stamped and sealed drawings for ${p.name}${p.address ? `, ${p.address}` : ''} are ready.`,
+      '',
+      'Download them here (no account needed):',
+      url,
+      '',
+      'If the city sends comments back, forward them to us and we will take care of the revisions.',
+      '',
+      'Thanks,',
+    ].join('\n');
+    return {
+      gmail: `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(email)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,
+      mailto: `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,
+    };
+  }
+
+  async function create(openGmail: boolean) {
+    const win = openGmail ? window.open('about:blank', '_blank') : null;
+    setBusy(true);
+    try {
+      const r = await api(`/sets/${d.set.id}/client-links`, { body: { email, name } });
+      setLink(r.url);
+      if (win) win.location.href = compose(r.url).gmail;
+      toast(openGmail ? 'Gmail draft opened. Review it and hit Send.' : 'Client link created.');
+      reload();
+    } catch (e: any) {
+      win?.close();
+      toast(e.message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="card col">
+      <div>
+        <b>Send the stamped set to the client.</b>{' '}
+        <span className="hint">They get a private link to download the sealed PDF. It works for 30 days. Sending a new link turns off the old one.</span>
+      </div>
+      <div className="form-grid">
+        <label className="field"><span>Client name</span><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></label>
+        <label className="field"><span>Client email</span><input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></label>
+      </div>
+      <div className="row">
+        <button className="btn primary" disabled={busy || !email} onClick={() => create(true)}><Icon name="letter" /> {live ? 'Send a new link in Gmail' : 'Open email in Gmail'}</button>
+        <button className="btn" disabled={busy || !email} onClick={() => create(false)}>Just create the link</button>
+      </div>
+      {link && (
+        <div className="col" style={{ gap: 8 }}>
+          <div className="row" style={{ flexWrap: 'nowrap' }}>
+            <input className="input mono" readOnly value={link} onFocus={(e) => e.target.select()} aria-label="Client link" />
+            <button className="btn" onClick={() => { navigator.clipboard?.writeText(link); toast('Link copied.'); }}>Copy</button>
+          </div>
+          <div className="hint">
+            Not using Gmail? <a className="link" href={compose(link).mailto}>Open in your email app</a>. The link is shown only once, so copy it now if you need it.
+          </div>
+        </div>
+      )}
+      {d.client_links.length > 0 && (
+        <div className="queue">
+          {d.client_links.slice(0, 4).map((r) => (
+            <div key={r.id} className="qi">
+              <div className="s">
+                <div className="t">{r.client_name || r.client_email}</div>
+                <div className="sub">
+                  Sent {timeAgo(r.created_at)} · {r.opened_at ? `Opened ${timeAgo(r.opened_at)}` : 'Not opened yet'} ·{' '}
+                  {r.revoked_at ? 'Turned off' : new Date(r.expires_at) < new Date() ? 'Expired' : `Active until ${fmtDate(r.expires_at)}`}
+                </div>
+              </div>
+              {!r.revoked_at && (
+                <button className="btn sm" onClick={async () => { await api(`/client-links/${r.id}`, { method: 'DELETE' }); reload(); }}>Turn off</button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function FileCells({ files, editable, onRemove, missing, showSharing }: { files: any[]; editable: boolean; onRemove: (f: any) => void; missing: string; showSharing?: boolean }) {
   if (!files.length) return missing ? <span className="hint" style={{ color: 'var(--amber)' }}>{missing}</span> : null;
   return (
     <div className="col" style={{ gap: 6 }}>
       {files.map((f) => (
         <div key={f.id} className="row" style={{ gap: 8, flexWrap: 'nowrap', minWidth: 0 }}>
-          <span className={`kind ${f.kind}`}>{f.kind === 'sealed_pdf' ? 'SEALED' : f.kind === 'reference' ? 'REF' : f.kind.toUpperCase()}</span>
+          <span className={`kind ${f.kind}`}>{kindLabel(f.kind)}</span>
           <button className="link" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} onClick={() => download(f.id)} title={`Download ${f.filename}`}>
             {f.filename}
           </button>

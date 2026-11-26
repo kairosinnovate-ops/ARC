@@ -6,7 +6,7 @@ import { Avatar, Icon, ROLE_LABEL, fmtDate, useToast, type Role } from '../ui';
 export default function TeamPage() {
   const s = useSession();
   const toast = useToast();
-  const [d, setD] = useState<{ members: any[]; invites: any[] } | null>(null);
+  const [d, setD] = useState<{ members: any[]; invites: any[]; limited?: boolean } | null>(null);
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<Role>('drafter');
   const [admin, setAdmin] = useState(false);
@@ -60,7 +60,11 @@ export default function TeamPage() {
         <div>
           <span className="label">{s.firm.firm_name}</span>
           <h1 style={{ marginTop: 8 }}>Team</h1>
-          <p className="hint">Each person's role here is their usual job. Who does what on a project is set on each project's page. Drafters only see the projects they're assigned to.</p>
+          <p className="hint">
+            {d?.limited
+              ? "You see yourself and the firm's project managers. Who works on each project is visible to the PM."
+              : "Each person's role here is their usual job. Who does what on a project is set on each project's page. Only PMs and admins see every project and the whole team. Everyone else sees the projects they're on and the PM."}
+          </p>
         </div>
       </div>
       <div className="grid2">

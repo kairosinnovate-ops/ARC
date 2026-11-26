@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { useSession } from '../App';
-import { ROLE_LABEL, type Role } from '../ui';
+import { PURPOSE, ROLE_LABEL, type Role } from '../ui';
 
 export type Member = { user_id: string; name: string; email: string; role: Role };
 
@@ -9,6 +9,7 @@ const EMPTY = {
   name: '', number: '', address: '', jurisdiction: '', permit_number: '',
   kind: 'initial', requirements: '',
   pm_id: '', drafter_id: '', architect_id: '', engineer_id: '', engineer_name: '', engineer_email: '',
+  purpose: '', client_name: '', client_email: '',
 };
 export type ProjectFormValue = typeof EMPTY;
 
@@ -58,8 +59,16 @@ export function ProjectFields({ f, setF }: { f: ProjectFormValue; setF: (f: Proj
           ))}
         </div>
       </div>
+      <div className="field wide">
+        <span>Drawings are for</span>
+        <div className="seg" role="radiogroup">
+          {Object.entries(PURPOSE).map(([k, l]) => (
+            <button type="button" key={k} className={f.purpose === k ? 'on' : ''} role="radio" aria-checked={f.purpose === k} onClick={() => setF({ ...f, purpose: f.purpose === k ? '' : k })}>{l}</button>
+          ))}
+        </div>
+      </div>
       <label className="field wide">
-        <span>Requirements for the drafter</span>
+        <span>Scope and requirements</span>
         <textarea className="input" value={f.requirements} onChange={set('requirements')} placeholder="Scope, standards, what to draw or change, due date…" />
       </label>
       {pick('pm_id', 'pm', 'Project manager', 'Choose a PM')}
@@ -72,6 +81,8 @@ export function ProjectFields({ f, setF }: { f: ProjectFormValue; setF: (f: Proj
           <label className="field"><span>Engineer email</span><input className="input" type="email" value={f.engineer_email} onChange={set('engineer_email')} /></label>
         </>
       )}
+      <label className="field"><span>Client name</span><input className="input" value={f.client_name} onChange={set('client_name')} /></label>
+      <label className="field"><span>Client email</span><input className="input" type="email" value={f.client_email} onChange={set('client_email')} /></label>
       <label className="field"><span>Project number</span><input className="input" value={f.number} onChange={set('number')} placeholder="2026-014" /></label>
       <label className="field"><span>Permit number</span><input className="input" value={f.permit_number} onChange={set('permit_number')} /></label>
       <label className="field wide"><span>Site address</span><input className="input" value={f.address} onChange={set('address')} /></label>

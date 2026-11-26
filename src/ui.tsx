@@ -4,13 +4,18 @@ export type Role = 'pm' | 'drafter' | 'architect' | 'engineer';
 export const ROLE_LABEL: Record<Role, string> = { pm: 'Project manager', drafter: 'Drafter', architect: 'Architect', engineer: 'Engineer' };
 
 export const SET_STATUS: Record<string, string> = {
+  intake: 'Intake',
   draft: 'With drafter',
   pm_review: 'PM check',
   architect_review: 'Architect review',
   pm_rework: 'Rework with PM',
+  final_record: 'Final record',
   engineer_review: 'Ready for stamp',
   sealed: 'Sealed',
 };
+export const PURPOSE: Record<string, string> = { permit: 'For permit', sale: 'For sale', permit_sale: 'For permit and sale' };
+const KIND_LABEL: Record<string, string> = { pdf: 'PDF', dwg: 'DWG', final_pdf: 'PDF', final_cad: 'CAD', sealed_pdf: 'SEALED', reference: 'REF', markup: 'MARKUP', other: 'FILE' };
+export const kindLabel = (k: string) => KIND_LABEL[k] || k.toUpperCase();
 export const COMMENT_STATUS: Record<string, string> = { open: 'Open', in_progress: 'In progress', addressed: 'Addressed' };
 
 export function Pill({ kind, children }: { kind: string; children: ReactNode }) {
@@ -163,6 +168,11 @@ export function fmtBytes(n: number) {
 
 const EVENT_TEXT: Record<string, string> = {
   project_created: 'created the project',
+  intake_started: 'started intake',
+  final_uploaded: 'added to the final record:',
+  final_submitted: 'turned in the final PDF and CAD. Ready for stamp',
+  client_link_sent: 'sent the stamped set to',
+  client_opened: 'opened the stamped set',
   set_created: 'started',
   file_uploaded: 'uploaded',
   file_removed: 'removed',
@@ -171,7 +181,7 @@ const EVENT_TEXT: Record<string, string> = {
   submitted: 'submitted the drawings to the PM',
   pm_approved: 'checked the set and sent it to the architect',
   pm_returned: 'sent the set back to the drafter',
-  architect_approved: 'approved the set. It is ready for stamp',
+  architect_approved: 'approved the set. The drafter turns in the final PDF and CAD next',
   architect_returned: 'sent markups back to the PM',
   engineer_returned: 'sent the set back to the PM',
   markup_uploaded: 'added a markup',
@@ -190,4 +200,4 @@ const EVENT_TEXT: Record<string, string> = {
 export function eventText(action: string) {
   return EVENT_TEXT[action] || action.replace(/_/g, ' ');
 }
-export const NOTE_EVENTS = new Set(['sent_to_drafter', 'submitted', 'pm_approved', 'pm_returned', 'architect_approved', 'architect_returned', 'engineer_returned', 'sealed']);
+export const NOTE_EVENTS = new Set(['intake_started', 'sent_to_drafter', 'submitted', 'pm_approved', 'pm_returned', 'architect_approved', 'architect_returned', 'engineer_returned', 'sealed']);

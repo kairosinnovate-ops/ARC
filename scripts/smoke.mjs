@@ -15,6 +15,12 @@ async function up(api, setId, name, kind, sheet, bytes) {
   return api(`/files/${s.file_id}/complete`, 'POST', {});
 }
 const stamp = Date.now();
+let D;
+async function finalRecord(id) {
+  await up(D, id, 'final.pdf', 'final_pdf', '', Buffer.from('%PDF final ' + id));
+  await up(D, id, 'final.dwg', 'final_cad', '', Buffer.from('AC final ' + id));
+  return D(`/sets/${id}/action`, 'POST', { action: 'submit_final' });
+}
 const em = (r) => `${r}${stamp}@mastan.test`;
 const owner = call(await tok(em('pm'), 'Kairos PM'));
 ok((await owner('/me')).firms.length === 0, 'new user has no firm');
@@ -23,7 +29,7 @@ ok(firm.status === 201 && firm.is_admin && firm.role === 'pm', 'create firm as P
 const PM = call(await tok(em('pm'), 'Kairos PM'), firm.firm_id);
 for (const [r, role] of [['d1', 'drafter'], ['d2', 'drafter'], ['ar', 'architect'], ['pe', 'engineer']])
   ok((await PM('/team/invites', 'POST', { email: em(r), role })).status === 201, `invite ${role} ${r}`);
-const D = call(await tok(em('d1'), 'Dana Drafter'));
+D = call(await tok(em('d1'), 'Dana Drafter'));
 const dme = await D('/me');
 ok(dme.firms[0]?.role === 'drafter', 'drafter joins on sign-in');
 const D2 = call(await tok(em('d2'), 'Other Drafter'));
@@ -43,11 +49,18 @@ ok((await D2(`/projects/${p.id}`)).status === 404, 'unassigned drafter cannot se
 ok((await D2('/projects'))._arr.length === 0, 'unassigned drafter sees no projects');
 ok((await D('/projects'))._arr.length === 1, 'assigned drafter sees the project');
 ok((await D(`/projects/${p.id}/sets`, 'POST', { brief: 'x' })).status === 403, 'drafter cannot start a revision');
-const set = await PM(`/projects/${p.id}/sets`, 'POST', { title: 'Deck addition', brief: 'Draw deck framing on S-101.' });
-ok(set.rev_number === 0 && set.status === 'draft', 'PM sends Rev 0 to drafter');
+// Intake: the architect shares site notes and sketches, the PM sets the scope and sends it to the drafter.
+const set = await A(`/projects/${p.id}/sets`, 'POST', { title: 'Deck addition', note: 'Site visit done, sketch attached.' });
+ok(set.rev_number === 0 && set.status === 'intake', 'architect starts Rev 0 at intake');
+ok((await up(A, set.id, 'sketch.pdf', 'reference', '', Buffer.from('sketch'))).ok, 'architect uploads hand sketch');
+ok((await D(`/sets/${set.id}`)).status === 200, 'assigned drafter can open the intake');
+ok((await up(D, set.id, 'S-101.pdf', 'pdf', 'S-101', Buffer.from('early'))).status === 400, 'drafter cannot draw before the scope is sent');
+ok((await A(`/sets/${set.id}/action`, 'POST', { action: 'send_to_drafter', note: 'x' })).status === 403, 'architect cannot send to drafter');
 ok((await up(PM, set.id, 'survey.pdf', 'reference', '', Buffer.from('ref'))).ok, 'PM attaches reference');
+ok((await PM(`/sets/${set.id}/action`, 'POST', { action: 'send_to_drafter', note: 'Draw deck framing on S-101. For permit.' })).status === 'draft', 'PM sends scope to drafter');
+ok((await D(`/sets/${set.id}`)).set.brief.includes('deck framing'), 'drafter sees the scope');
 ok((await up(D, set.id, 'S-101.pdf', 'pdf', 'S-101', Buffer.from('%PDF-1.4 plan'))).ok, 'drafter uploads PDF');
-ok((await up(D, set.id, 'S-101.dwg', 'dwg', 'S-101', Buffer.from('AC1032'))).ok, 'drafter uploads DWG');
+ok((await up(D, set.id, 'S-101.dwg', 'dwg', 'S-101', Buffer.from('AC1032'))).status === 400, 'review rounds are PDF only');
 ok((await A(`/sets/${set.id}/action`, 'POST', { action: 'submit' })).status === 403, 'architect cannot submit for drafter');
 ok((await D(`/sets/${set.id}/action`, 'POST', { action: 'submit', note: 'Done' })).status === 'pm_review', 'drafter submits to PM');
 ok((await up(D, set.id, 'late.pdf', 'pdf', 'S-102', Buffer.from('late'))).status === 400, 'drafter locked out while PM checks');
@@ -65,14 +78,20 @@ ok((await PM(`/sets/${set.id}/action`, 'POST', { action: 'pm_send_back', note: '
 ok((await D(`/sets/${set.id}`)).files.some((f) => f.kind === 'markup'), 'drafter now sees the markup');
 ok((await D(`/sets/${set.id}/action`, 'POST', { action: 'submit' })).status === 'pm_review', 'drafter resubmits after rework');
 ok((await PM(`/sets/${set.id}/action`, 'POST', { action: 'pm_approve' })).status === 'architect_review', 'PM approves again');
-ok((await A(`/sets/${set.id}/action`, 'POST', { action: 'architect_approve' })).status === 'engineer_review', 'architect approves for stamp');
+ok((await A(`/sets/${set.id}/action`, 'POST', { action: 'architect_approve' })).status === 'final_record', 'architect approves; final record next');
+ok((await PM(`/sets/${set.id}/stamp-links`, 'POST', { email: 'pat@pe.test' })).status === 400, 'no stamp link before final record');
+ok((await D(`/sets/${set.id}/action`, 'POST', { action: 'submit_final' })).status === 400, 'final needs PDF and CAD');
+ok((await up(D, set.id, 'final.pdf', 'final_pdf', '', Buffer.from('%PDF final'))).ok, 'drafter uploads final PDF');
+ok((await D(`/sets/${set.id}/action`, 'POST', { action: 'submit_final' })).status === 400, 'final still needs CAD');
+ok((await up(D, set.id, 'S-101.dwg', 'final_cad', 'S-101', Buffer.from('AC1032 final'))).ok, 'drafter uploads final CAD');
+ok((await D(`/sets/${set.id}/action`, 'POST', { action: 'submit_final' })).status === 'engineer_review', 'final record done; ready for stamp');
 ok((await D(`/sets/${set.id}/stamp-links`, 'POST', { email: 'pat@pe.test' })).status === 403, 'drafter cannot send stamp link');
 const link = await PM(`/sets/${set.id}/stamp-links`, 'POST', { email: 'pat@pe.test', name: 'Pat PE' });
 ok(link.status === 201 && link.url.includes('/stamp/'), 'PM creates stamp link');
 const token = link.url.split('/stamp/')[1];
 const pub = async (path, body) => { const r = await fetch(`${B}/api/public/stamp/${token}${path}`, { method: body ? 'POST' : 'GET', headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }); return { status: r.status, ...(await r.json()) }; };
 const pv = await pub('');
-ok(pv.status === 'open' && pv.files.length === 2 && pv.files.every((f) => ['pdf', 'dwg'].includes(f.kind)), 'engineer sees only the drawings (no markups or references)');
+ok(pv.status === 'open' && pv.files.length === 2 && pv.files.every((f) => ['final_pdf', 'final_cad'].includes(f.kind)), 'engineer sees only the final PDF and CAD');
 ok((await fetch(`${B}/api/public/stamp/notarealtokenatall123456`)).status === 404, 'bad token rejected');
 const dlr = await pub(`/files/${pv.files[0].id}`);
 ok(dlr.url && (await fetch(dlr.url)).ok, 'engineer downloads without account');
@@ -95,9 +114,11 @@ await up(D, set1.id, 'S-101.pdf', 'pdf', 'S-101', Buffer.from('%PDF rev1'));
 await D(`/sets/${set1.id}/action`, 'POST', { action: 'submit' });
 await PM(`/sets/${set1.id}/action`, 'POST', { action: 'pm_approve' });
 await A(`/sets/${set1.id}/action`, 'POST', { action: 'architect_approve' });
+await finalRecord(set1.id);
 ok((await E(`/sets/${set1.id}/action`, 'POST', { action: 'engineer_return', note: 'Need calcs' })).status === 'pm_rework', 'in-app engineer sends back to PM');
 ok((await PM(`/sets/${set1.id}/action`, 'POST', { action: 'pm_resubmit' })).status === 'architect_review', 'PM resubmits to architect');
 await A(`/sets/${set1.id}/action`, 'POST', { action: 'architect_approve' });
+await finalRecord(set1.id);
 ok((await up(E, set1.id, 'sealed.pdf', 'sealed_pdf', '', Buffer.from('%PDF sealed'))).ok, 'in-app engineer uploads seal');
 ok((await E(`/sets/${set1.id}/action`, 'POST', { action: 'seal', license: 'PE 9' })).status === 'sealed', 'in-app engineer seals');
 
@@ -118,6 +139,7 @@ await up(D, qs.id, 'G-1.pdf', 'pdf', 'G-1', Buffer.from('%PDF g'));
 await D(`/sets/${qs.id}/action`, 'POST', { action: 'submit' });
 await PM(`/sets/${qs.id}/action`, 'POST', { action: 'pm_approve' });
 await A(`/sets/${qs.id}/action`, 'POST', { action: 'architect_approve' });
+await finalRecord(qs.id);
 const qlink = await PM(`/sets/${qs.id}/stamp-links`, 'POST', { email: 'pat@pe.test', name: 'Pat PE' });
 const qtoken = qlink.url?.split('/stamp/')[1];
 ok(qtoken && (await fetch(`${B}/api/public/stamp/${qtoken}`)).ok, 'stamp link works before delete');
@@ -131,7 +153,7 @@ ok((await PM(`/projects/${q.id}`)).status === 404, 'deleted project is hidden');
 ok(!(await PM('/projects'))._arr.some((x) => x.id === q.id), 'deleted project leaves the list');
 ok((await D(`/sets/${qs.id}`)).status === 404, 'deleted project sets are hidden');
 ok((await fetch(`${B}/api/public/stamp/${qtoken}`)).status === 404, 'stamp link stops working');
-ok((await PM('/trash'))._arr.some((x) => x.id === q.id && x.file_count === 1), 'project is in Trash');
+ok((await PM('/trash'))._arr.some((x) => x.id === q.id && x.file_count === 3), 'project is in Trash');
 ok((await D('/trash'))._arr.length === 0, 'drafter sees nothing in Trash');
 ok((await D(`/trash/${q.id}/restore`, 'POST', {})).status === 404, 'drafter cannot restore');
 ok((await outsider(`/trash/${q.id}/restore`, 'POST', {})).status === 404, 'other firm cannot restore');
@@ -140,7 +162,52 @@ ok((await PM(`/projects/${q.id}`)).project?.id === q.id, 'restored project is ba
 await PM(`/projects/${q.id}/delete`, 'POST', { confirm_name: 'Old Garage' });
 ok((await PM(`/trash/${q.id}/delete`, 'POST', { confirm_name: 'nope' })).status === 400, 'delete forever needs the name');
 const gone = await PM(`/trash/${q.id}/delete`, 'POST', { confirm_name: 'Old Garage' });
-ok(gone.ok && gone.files_removed === 1, 'PM deletes forever');
+ok(gone.ok && gone.files_removed === 3, 'PM deletes forever');
 ok(!existsSync(`${qdir}/${qs.id}`) || !(await import('node:fs')).readdirSync(`${qdir}/${qs.id}`).length, 'stored files removed');
 ok(!(await PM('/trash'))._arr.some((x) => x.id === q.id), 'Trash is empty again');
 ok((await PM(`/projects/${p.id}`)).project?.id === p.id, 'other projects untouched');
+
+// Who sees who: only the PM sees the whole team
+const dp = await D(`/projects/${p.id}`);
+ok(dp.project.architect_id === null && dp.project.engineer_id === null && dp.project.engineer_email === '', 'drafter does not see architect or engineer');
+ok(dp.members.every((x) => [dme.user.id, dp.project.pm_id].includes(x.user_id)), 'drafter sees only self and PM');
+ok(dp.events.filter((e) => e.actor_id === ame.user.id).every((e) => e.actor_name === 'Architect'), 'architect actions show as "Architect" to the drafter');
+const ap = await A(`/projects/${p.id}`);
+ok(ap.project.drafter_id === null && ap.project.engineer_id === eme.user.id, 'architect sees PM and engineer, not drafter');
+const pp = await PM(`/projects/${p.id}`);
+ok(pp.project.drafter_id === dme.user.id && pp.members.length >= 5, 'PM sees everyone');
+const dteam = await D('/team');
+ok(dteam.limited && !dteam.members.some((x) => x.user_id === ame.user.id), 'drafter team page hides other members');
+const other = await PM('/projects', 'POST', { name: 'Not yours', drafter_id: dme.user.id });
+ok(!(await A('/projects'))._arr.some((x) => x.id === other.id), 'architect sees only projects they are on');
+ok((await A(`/projects/${other.id}`)).status === 404, 'architect cannot open other projects');
+
+// City comments start a new round; PM uploads a stamp received by email; client gets a link
+const round = await PM(`/projects/${p.id}/sets`, 'POST', { title: 'City round 1', brief: 'Fix per city comments.', from_comments: true });
+ok(round.status === 'draft' && round.reason === 'city', 'PM starts a city-comment round');
+ok((await PM(`/projects/${p.id}`)).comments.filter((c) => c.status !== 'addressed').every((c) => c.round_set_id === round.id), 'open comments tied to the round');
+await up(D, round.id, 'A-101.pdf', 'pdf', 'A-101', Buffer.from('%PDF city'));
+await D(`/sets/${round.id}/action`, 'POST', { action: 'submit' });
+await PM(`/sets/${round.id}/action`, 'POST', { action: 'pm_approve' });
+await A(`/sets/${round.id}/action`, 'POST', { action: 'architect_approve' });
+ok((await finalRecord(round.id)).status === 'engineer_review', 'city round reaches stamp');
+ok((await up(D, round.id, 'stamped.pdf', 'sealed_pdf', '', Buffer.from('x'))).status === 403, 'drafter cannot upload a stamp');
+ok((await up(PM, round.id, 'stamped-by-email.pdf', 'sealed_pdf', '', Buffer.from('%PDF emailed stamp'))).ok, 'PM uploads stamp received by email');
+const ms = await PM(`/sets/${round.id}/action`, 'POST', { action: 'seal', engineer_name: 'Pat PE', license: 'PE 12345' });
+ok(ms.status === 'sealed' && ms.sealed_via === 'manual' && ms.sealed_by_name === 'Pat PE', 'PM records the emailed stamp');
+ok((await PM(`/sets/${round.id}/client-links`, 'POST', { email: 'bad' })).status === 400, 'client link needs an email');
+ok((await D(`/sets/${round.id}/client-links`, 'POST', { email: 'c@client.test' })).status === 403, 'drafter cannot send to client');
+const cl = await PM(`/sets/${round.id}/client-links`, 'POST', { email: 'owner@client.test', name: 'Sam Owner' });
+ok(cl.status === 201 && cl.url.includes('/d/'), 'PM creates client link');
+const ctoken = cl.url.split('/d/')[1];
+const cv = await (await fetch(`${B}/api/public/delivery/${ctoken}`)).json();
+ok(cv.files.length === 1 && cv.files[0].filename === 'stamped-by-email.pdf' && cv.project.name === 'Hillside Residence', 'client sees only the stamped set');
+const cdl = await (await fetch(`${B}/api/public/delivery/${ctoken}/files/${cv.files[0].id}`)).json();
+ok(cdl.url && (await fetch(cdl.url)).ok, 'client downloads without account');
+const rs = await PM(`/sets/${round.id}`);
+ok(rs.set.delivered_at && rs.client_links.length === 1 && rs.events.some((e) => e.action === 'client_opened'), 'delivery and first open are logged');
+ok((await D(`/sets/${round.id}`)).client_links.length === 0, 'drafter does not see client links');
+ok((await PM(`/projects/${p.id}`)).project.client_email === 'owner@client.test', 'client saved on the project');
+await PM(`/client-links/${rs.client_links[0].id}`, 'DELETE');
+ok((await fetch(`${B}/api/public/delivery/${ctoken}`)).status === 404, 'turned-off client link stops working');
+ok((await PM(`/sets/${set1.id}/client-links`, 'POST', { email: 'x@client.test' })).status === 201, 'any sealed set can be delivered');

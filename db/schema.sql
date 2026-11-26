@@ -178,3 +178,43 @@ create index if not exists stamp_requests_set_idx on stamp_requests(revision_set
 -- ---------------------------------------------------------------------------
 alter table projects add column if not exists deleted_at timestamptz;
 alter table projects add column if not exists deleted_by text
+;
+
+-- ---------------------------------------------------------------------------
+-- v4 (2026-11-26): Mastan's full workflow.
+-- intake = the architect's site notes and sketches, before the PM sends the scope to the drafter.
+-- final_record = approved; the drafter uploads the final PDF and CAD for the record before stamp.
+-- ---------------------------------------------------------------------------
+alter table revision_sets drop constraint if exists revision_sets_status_check;
+alter table revision_sets add constraint revision_sets_status_check
+  check (status in ('intake','draft','pm_review','architect_review','pm_rework','final_record','engineer_review','sealed'));
+alter table revision_sets add column if not exists reason text not null default '';
+alter table revision_sets add column if not exists delivered_at timestamptz;
+
+alter table files drop constraint if exists files_kind_check;
+alter table files add constraint files_kind_check
+  check (kind in ('pdf','dwg','sealed_pdf','reference','markup','final_pdf','final_cad','other'));
+
+alter table projects add column if not exists purpose text not null default '';
+alter table projects add column if not exists client_name text not null default '';
+alter table projects add column if not exists client_email text not null default '';
+
+-- The revision that was started to answer a city comment.
+alter table city_comments add column if not exists round_set_id uuid references revision_sets(id) on delete set null;
+
+-- Download links for the client's stamped set (no account needed).
+create table if not exists client_links (
+  id uuid primary key default gen_random_uuid(),
+  firm_id uuid not null references firms(id) on delete cascade,
+  project_id uuid not null references projects(id) on delete cascade,
+  revision_set_id uuid not null references revision_sets(id) on delete cascade,
+  token_hash text not null unique,
+  client_name text not null default '',
+  client_email text not null default '',
+  created_by text not null,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  opened_at timestamptz,
+  revoked_at timestamptz
+);
+create index if not exists client_links_set_idx on client_links(revision_set_id)

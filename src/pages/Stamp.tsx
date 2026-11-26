@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { sha256 } from '../api';
-import { Icon, fmtBytes, fmtDate } from '../ui';
+import { Icon, fmtBytes, fmtDate, kindLabel } from '../ui';
 
 /** Public page an engineer opens from the email. The token in the URL is the only credential. */
 export default function StampPage() {
@@ -122,7 +122,7 @@ export default function StampPage() {
           <div className="col" style={{ gap: 8 }}>
             {drawings.map((f: any) => (
               <div key={f.id} className="row" style={{ gap: 8, flexWrap: 'nowrap', minWidth: 0 }}>
-                <span className={`kind ${f.kind}`}>{f.kind.toUpperCase()}</span>
+                <span className={`kind ${f.kind}`}>{kindLabel(f.kind)}</span>
                 <button className="link" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} onClick={() => get(f.id)}>{f.filename}</button>
                 <span className="hint" style={{ whiteSpace: 'nowrap' }}>{fmtBytes(Number(f.size_bytes))}</span>
                 {f.sheet && <span className="mono hash">{f.sheet}</span>}
