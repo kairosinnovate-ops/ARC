@@ -238,3 +238,26 @@ button.qi { width: 100%; text-align: left; }
 .chip.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); color: var(--ink); }
 .tagrow { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .tag { font-size: 11.5px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--muted); }
+
+/* Dashboard: stage, whose turn, summary tiles */
+.statline.tiles { grid-template-columns: repeat(4, minmax(0,1fr)); }
+.statline.tiles .stat { border: 0; text-align: left; font: inherit; color: inherit; cursor: pointer; transition: background .15s; }
+.statline.tiles .stat:hover { background: var(--raise); }
+.statline.tiles .stat.on { background: var(--accent-soft); box-shadow: inset 0 -2px 0 var(--accent); }
+.statline.tiles .stat.hot .n { color: var(--accent); }
+@media (max-width: 900px) { .statline.tiles { grid-template-columns: repeat(2, minmax(0,1fr)); } }
+.chip .count { font-size: 11px; min-width: 18px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: var(--paper); font-weight: 600; text-align: center; }
+.sg-intake, .sg-final_record { background: var(--sunk); color: var(--ink); border-color: var(--line-2); }
+.sg-review { background: var(--accent-soft); color: var(--accent); }
+.sg-stamp { background: var(--amber-soft); color: var(--amber); }
+.sg-ready { background: var(--seal-soft); color: var(--seal); border-color: color-mix(in srgb, var(--seal) 30%, transparent); }
+.sg-delivered { background: var(--seal-soft); color: var(--seal); }
+.sg-city { background: var(--redline-soft); color: var(--redline); }
+.stagebox { display: flex; flex-direction: column; align-items: flex-start; gap: 7px; }
+.stagebox .pill { font-size: 12.5px; padding: 3px 11px 3px 10px; }
+.waiting { font-size: 12.5px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+.waiting .step-l { color: var(--faint); }
+.waiting.done { color: var(--faint); }
+.waiting.yours { color: var(--ink); font-weight: 500; }
+.turn { font-size: 11px; font-weight: 600; letter-spacing: .02em; padding: 2px 8px; border-radius: 6px; background: var(--accent); color: var(--paper); }
+.pcard.mine { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: radial-gradient(120% 120% at 0% 0%, var(--accent-soft), transparent 60%), var(--surface); }

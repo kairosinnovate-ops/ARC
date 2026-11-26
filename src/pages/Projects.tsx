@@ -13,17 +13,31 @@ export default function ProjectsPage() {
   const canCreate = s.firm.is_admin || ['pm', 'architect'].includes(s.firm.role);
   const creating = params.get('new') === '1' && canCreate;
   const typeFilter = params.get('type') || '';
-  const shown = (projects || []).filter((p) => !typeFilter || (p.set_types || []).includes(typeFilter));
-  const usedTypes = Object.keys(SET_TYPES).filter((k) => (projects || []).some((p) => (p.set_types || []).includes(k)));
+  const view = (params.get('view') || 'all') as View;
+  const all = projects || [];
+  const byType = all.filter((p) => !typeFilter || (p.set_types || []).includes(typeFilter));
+  const shown = byType
+    .filter(VIEWS[view]?.test ?? (() => true))
+    .sort((a, b) => Number(b.your_turn) - Number(a.your_turn));
+  const usedTypes = Object.keys(SET_TYPES).filter((k) => all.some((p) => (p.set_types || []).includes(k)));
+  const setParam = (k: string, v: string) => {
+    const n = new URLSearchParams(params);
+    if (v && v !== 'all') n.set(k, v); else n.delete(k);
+    setParams(n);
+  };
 
   useEffect(() => {
     s.setCrumbs(<><span className="sep">/</span><b>Projects</b></>);
     api<any[]>('/projects').then(setProjects).catch((e) => setErr(e.message));
   }, [s.firm.firm_id]);
 
-  const open = (projects || []).reduce((n, p) => n + p.open_comments, 0);
-  const inReview = (projects || []).filter((p) => ['architect_review', 'engineer_review'].includes(p.latest_status)).length;
-  const sealed = (projects || []).filter((p) => p.latest_status === 'sealed').length;
+  const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
+  const tiles: { n: number; l: string; v: View; hot?: boolean }[] = [
+    { n: all.filter((p) => p.stage !== 'delivered').length, l: 'Active projects', v: 'all' },
+    { n: all.filter((p) => p.your_turn).length, l: 'Waiting on you', v: 'mine', hot: true },
+    { n: all.filter((p) => p.last_delivered_at && new Date(p.last_delivered_at) >= monthStart).length, l: 'Delivered this month', v: 'delivered' },
+    { n: all.filter((p) => p.stage === 'city').length, l: 'City revision rounds open', v: 'city' },
+  ];
 
   return (
     <main className="content">
@@ -44,10 +58,18 @@ export default function ProjectsPage() {
       </div>
 
       {projects && projects.length > 0 && (
-        <div className="statline">
-          <div className="stat"><div className="n">{inReview}</div><div className="l">Sets in review</div></div>
-          <div className="stat"><div className="n">{open}</div><div className="l">Open city comments</div></div>
-          <div className="stat"><div className="n">{sealed}</div><div className="l">Projects with a sealed latest set</div></div>
+        <div className="statline tiles">
+          {tiles.map((t) => (
+            <button
+              key={t.l}
+              type="button"
+              className={`stat${view === t.v && t.v !== 'all' ? ' on' : ''}${t.hot && t.n > 0 ? ' hot' : ''}`}
+              onClick={() => setParam('view', view === t.v ? 'all' : t.v)}
+            >
+              <div className="n">{t.n}</div>
+              <div className="l">{t.l}</div>
+            </button>
+          ))}
         </div>
       )}
 
@@ -65,32 +87,45 @@ export default function ProjectsPage() {
           )}
         </div>
       )}
-      {projects && projects.length > 0 && usedTypes.length > 1 && (
-        <div className="filters" style={{ marginBottom: 14 }}>
-          <select
-            className="input"
-            style={{ width: 'auto' }}
-            value={typeFilter}
-            aria-label="Filter by drawing set type"
-            onChange={(e) => { const n = new URLSearchParams(params); if (e.target.value) n.set('type', e.target.value); else n.delete('type'); setParams(n); }}
-          >
-            <option value="">All set types</option>
-            {usedTypes.map((k) => <option key={k} value={k}>{SET_TYPES[k]}</option>)}
-          </select>
-          {typeFilter && <span className="hint">{shown.length} of {projects.length} projects</span>}
+      {projects && projects.length > 0 && (
+        <div className="filters" style={{ margin: '18px 0 14px' }}>
+          <div className="chips" role="group" aria-label="Show">
+            {(Object.keys(VIEWS) as View[]).map((k) => (
+              <button key={k} type="button" className={`chip${view === k ? ' on' : ''}`} aria-pressed={view === k} onClick={() => setParam('view', k)}>
+                {VIEWS[k].label}
+                {k === 'mine' && tiles[1].n > 0 && <span className="count">{tiles[1].n}</span>}
+              </button>
+            ))}
+          </div>
+          {usedTypes.length > 1 && (
+            <select
+              className="input"
+              style={{ width: 'auto', marginLeft: 'auto' }}
+              value={typeFilter}
+              aria-label="Filter by drawing set type"
+              onChange={(e) => setParam('type', e.target.value)}
+            >
+              <option value="">All set types</option>
+              {usedTypes.map((k) => <option key={k} value={k}>{SET_TYPES[k]}</option>)}
+            </select>
+          )}
+          {(typeFilter || view !== 'all') && <span className="hint">{shown.length} of {projects.length} projects</span>}
         </div>
+      )}
+      {projects && projects.length > 0 && shown.length === 0 && (
+        <div className="empty"><p style={{ margin: 0 }}>{view === 'mine' ? 'Nothing is waiting on you right now.' : 'No projects match this filter.'}</p></div>
       )}
       {projects && projects.length > 0 && (
         <div className="pgrid">
           {shown.map((p) => (
-            <Link key={p.id} to={`/projects/${p.id}`} className="pcard">
+            <Link key={p.id} to={`/projects/${p.id}`} className={`pcard${p.your_turn ? ' mine' : ''}`}>
               <div className="row" style={{ justifyContent: 'space-between' }}>
                 <span className="mono" style={{ color: 'var(--faint)' }}>{p.number || 'No number'}</span>
-                {p.latest_status ? (
-                  <Pill kind={`st-${p.latest_status}`}>Rev {p.latest_rev} · {SET_STATUS[p.latest_status]}</Pill>
-                ) : (
-                  <Pill kind="st-draft">No sets yet</Pill>
-                )}
+                {p.latest_status && <span className="mono" style={{ color: 'var(--faint)' }}>Rev {p.latest_rev}</span>}
+              </div>
+              <div className="stagebox">
+                <Pill kind={`sg-${p.stage}`}>{stageLabel(p)}</Pill>
+                <WaitingOn p={p} />
               </div>
               <h3>{p.name}</h3>
               <div className="meta">{p.kind === 'modification' ? 'Modification' : 'Initial drawings'}{p.address ? ` · ${p.address}` : ''}</div>
@@ -109,6 +144,45 @@ export default function ProjectsPage() {
       {creating && <NewProject onClose={() => setParams({})} />}
     </main>
   );
+}
+
+type View = 'all' | 'mine' | 'review' | 'city' | 'delivered';
+const VIEWS: Record<View, { label: string; test: (p: any) => boolean }> = {
+  all: { label: 'All', test: () => true },
+  mine: { label: 'Your turn', test: (p) => p.your_turn },
+  review: { label: 'In review', test: (p) => ['review', 'final_record', 'stamp'].includes(p.stage) },
+  city: { label: 'City revisions', test: (p) => p.stage === 'city' },
+  delivered: { label: 'Delivered', test: (p) => p.stage === 'delivered' },
+};
+
+const ROLE: Record<string, string> = { pm: 'project manager', drafter: 'drafter', architect: 'architect', engineer: 'engineer' };
+
+function stageLabel(p: any) {
+  switch (p.stage) {
+    case 'intake': return 'Intake';
+    case 'review': return `Review round ${p.round}`;
+    case 'final_record': return 'Awaiting final record';
+    case 'stamp': return 'Awaiting stamp';
+    case 'ready': return 'Stamped, ready for client';
+    case 'delivered': return 'Delivered to client';
+    case 'city': return `City revisions · round ${p.round}`;
+    default: return 'Unknown';
+  }
+}
+
+/** What the next move is, in plain words, for whoever it's waiting on. */
+function nextStep(p: any) {
+  if (!p.latest_status) return 'Start the intake';
+  if (p.latest_status === 'intake') return 'Send the scope to the drafter';
+  if (p.latest_status === 'sealed') return p.stage === 'city' ? 'Start the city round' : p.stage === 'ready' ? 'Send to the client' : '';
+  return SET_STATUS[p.latest_status];
+}
+
+function WaitingOn({ p }: { p: any }) {
+  if (!p.waiting_on) return <div className="waiting done">Nothing waiting</div>;
+  const step = nextStep(p);
+  if (p.your_turn) return <div className="waiting yours"><span className="turn">Your turn</span>{step}</div>;
+  return <div className="waiting">Waiting on {ROLE[p.waiting_on]}{step ? <span className="step-l"> · {step}</span> : null}</div>;
 }
 
 function NewProject({ onClose }: { onClose: () => void }) {
