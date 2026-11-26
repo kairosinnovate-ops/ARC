@@ -1,0 +1,74 @@
+// End-to-end API check against the local dev server (npm run dev must be running).
+const B = process.env.BASE || 'http://127.0.0.1:5173';
+const tok = async (email, name) => (await (await fetch(B + '/dev-auth/token', { method: 'POST', body: JSON.stringify({ email, name }) })).json()).token;
+const call = (t, firm) => async (path, method = 'GET', body) => {
+  const r = await fetch(B + '/api' + path, { method, headers: { authorization: 'Bearer ' + t, 'content-type': 'application/json', ...(firm ? { 'x-arc-firm': firm } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json();
+  return { status: r.status, ...j, _arr: Array.isArray(j) ? j : undefined };
+};
+const ok = (c, msg) => { if (!c) { console.error('FAIL:', msg); process.exitCode = 1; } else console.log('ok  ', msg); };
+const sha = async (buf) => Buffer.from(await crypto.subtle.digest('SHA-256', buf)).toString('hex');
+async function up(api, setId, name, kind, sheet, bytes) {
+  const s = await api(`/sets/${setId}/files`, 'POST', { kind, sheet, filename: name, size: bytes.length, sha256: await sha(bytes), content_type: 'application/pdf' });
+  if (s.status !== 201) return s;
+  await fetch(s.upload_url, { method: 'PUT', body: bytes });
+  return api(`/files/${s.file_id}/complete`, 'POST', {});
+}
+const stamp = Date.now();
+const owner = call(await tok(`owner${stamp}@mastan.test`, 'Kairos'));
+ok((await owner('/me')).firms.length === 0, 'new user has no firm');
+const firm = await owner('/firms', 'POST', { name: 'Mastan Group', role: 'architect' });
+ok(firm.status === 201 && firm.is_admin, 'create firm as admin');
+const O = call(await tok(`owner${stamp}@mastan.test`, 'Kairos'), firm.firm_id);
+ok((await O('/team/invites', 'POST', { email: `drafter${stamp}@mastan.test`, role: 'drafter' })).status === 201, 'invite drafter');
+ok((await O('/team/invites', 'POST', { email: `pe${stamp}@mastan.test`, role: 'engineer' })).status === 201, 'invite engineer');
+const D = call(await tok(`drafter${stamp}@mastan.test`, 'Dana Drafter'));
+const dme = await D('/me');
+ok(dme.firms.length === 1 && dme.firms[0].role === 'drafter', 'drafter auto-joins on sign-in');
+const E = call(await tok(`pe${stamp}@mastan.test`, 'Eli Engineer'));
+ok((await E('/me')).firms[0]?.role === 'engineer', 'engineer auto-joins');
+const outsider = call(await tok(`x${stamp}@other.test`, 'Outsider'));
+await outsider('/firms', 'POST', { name: 'Other Firm', role: 'architect' });
+
+const p = await D('/projects', 'POST', { name: 'Hillside Residence', number: '2026-014', jurisdiction: 'City of Oakland' });
+ok(p.status === 201, 'drafter creates project');
+ok((await outsider(`/projects/${p.id}`)).status === 404, 'other firm cannot see project');
+const set = await D(`/projects/${p.id}/sets`, 'POST', { title: 'Permit set' });
+ok(set.rev_number === 0, 'Rev 0 created');
+ok((await D(`/projects/${p.id}/sets`, 'POST', {})).status === 400, 'cannot start Rev 1 while Rev 0 open');
+ok((await D(`/sets/${set.id}/action`, 'POST', { action: 'submit' })).status === 400, 'submit blocked without PDF');
+ok((await up(D, set.id, 'A-101.pdf', 'pdf', 'A-101', Buffer.from('%PDF-1.4 plan'))).ok, 'upload PDF');
+ok((await up(D, set.id, 'A-101.dwg', 'dwg', 'A-101', Buffer.from('AC1032 dwg bytes'))).ok, 'upload DWG');
+ok((await up(outsider, set.id, 'x.pdf', 'pdf', '', Buffer.from('x'))).status === 404, 'outsider cannot upload');
+ok((await O(`/sets/${set.id}/action`, 'POST', { action: 'submit' })).status === 403, 'architect cannot submit (drafter step)');
+ok((await D(`/sets/${set.id}/action`, 'POST', { action: 'submit', note: 'Ready' })).status === 'architect_review', 'drafter submits');
+ok((await up(D, set.id, 'A-102.pdf', 'pdf', 'A-102', Buffer.from('late'))).status === 400, 'files locked in review');
+ok((await O(`/sets/${set.id}/action`, 'POST', { action: 'return' })).status === 400, 'return needs a note');
+ok((await O(`/sets/${set.id}/action`, 'POST', { action: 'return', note: 'Fix door tags' })).status === 'returned', 'architect returns');
+ok((await D(`/sets/${set.id}/action`, 'POST', { action: 'submit' })).status === 'architect_review', 'drafter resubmits');
+ok((await O(`/sets/${set.id}/action`, 'POST', { action: 'approve' })).status === 'engineer_review', 'architect approves');
+ok((await E(`/sets/${set.id}/action`, 'POST', { action: 'seal' })).status === 400, 'seal blocked without sealed PDF');
+ok((await up(O, set.id, 'sealed.pdf', 'sealed_pdf', '', Buffer.from('signed'))).status === 403, 'architect cannot upload seal');
+ok((await up(E, set.id, 'Rev0-sealed.pdf', 'sealed_pdf', '', Buffer.from('%PDF signed'))).ok, 'engineer uploads sealed PDF');
+ok((await E(`/sets/${set.id}/action`, 'POST', { action: 'seal' })).status === 'sealed', 'engineer seals');
+const sd = await D(`/sets/${set.id}`);
+ok(sd.files.length === 3 && sd.files.every((f) => /^[0-9a-f]{64}$/.test(f.sha256)), 'sealed set keeps 3 fingerprinted files');
+const dl = await D(`/files/${sd.files[0].id}/download`);
+ok(dl.url && (await fetch(dl.url)).ok, 'download works');
+ok((await D(`/files/${sd.files[0].id}`, 'DELETE')).status === 400, 'cannot delete from sealed set');
+
+const letter = `CITY OF OAKLAND PLAN CHECK\nBUILDING\n1. Sheet A-101: Show egress window sizes for bedrooms 2 and 3.\n2. Provide guard height at deck,\n   see detail 4/A-501.\nSTRUCTURAL\n3) S-201 Provide hold-down schedule.`;
+const prev = await D(`/projects/${p.id}/letter/preview`, 'POST', { text: letter });
+ok(prev._arr?.length === 3 && prev._arr[0].sheet === 'A-101' && prev._arr[2].discipline === 'Structural' && prev._arr[1].body.includes('A-501'), 'letter parsed into 3 comments');
+ok((await D(`/projects/${p.id}/letter/import`, 'POST', { items: prev._arr, revision_set_id: set.id, received_on: '2026-11-10' })).imported === 3, 'letter imported');
+const pd = await D(`/projects/${p.id}`);
+ok(pd.comments.length === 3 && pd.comments.every((c) => c.days_waiting >= 15), 'comments with days waiting');
+const c1 = pd.comments.find((c) => c.number === '1');
+const upd = await D(`/comments/${c1.id}`, 'PATCH', { status: 'addressed', owner_id: dme.user.id, response: 'Added window schedule to A-101.' });
+ok(upd.status === 'addressed' && upd.owner_id === dme.user.id, 'comment addressed with owner + response');
+ok((await outsider(`/comments/${c1.id}`, 'PATCH', { status: 'open' })).status === 404, 'outsider cannot edit comment');
+const set1 = await D(`/projects/${p.id}/sets`, 'POST', {});
+ok(set1.rev_number === 1, 'Rev 1 allowed after seal');
+ok((await O(`/team/members/${dme.user.id}`, 'PATCH', { role: 'architect' })).role === 'architect', 'admin changes role');
+ok((await D(`/team/members/${dme.user.id}`, 'PATCH', { role: 'engineer' })).status === 403, 'non-admin cannot change own role');
+ok((await O('/projects'))._arr.length === 1, 'firm sees its 1 project');

@@ -1,0 +1,35 @@
+{
+  "name": "arc",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "ARC_LOCAL=1 VITE_DEV_AUTH=1 vite",
+    "dev:web": "vite",
+    "build": "tsc && vite build",
+    "typecheck": "tsc",
+    "db:migrate": "node scripts/migrate.mjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1178.0",
+    "@aws-sdk/s3-request-presigner": "^3.1178.0",
+    "@neon/neon-js": "^0.10.2",
+    "@neondatabase/serverless": "^1.2.1",
+    "jose": "^6.2.18",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.28.0"
+  },
+  "devDependencies": {
+    "@netlify/functions": "^6.1.2",
+    "@types/node": "^22.20.7",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "dotenv": "^18.0.10",
+    "pg": "^8.23.1",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  }
+}
