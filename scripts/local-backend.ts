@@ -4,6 +4,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { generateKeyPair, SignJWT, createLocalJWKSet, exportJWK } from 'jose';
 import pg from 'pg';
 import { handle } from '../server/api.ts';
@@ -46,7 +47,7 @@ export async function middleware(req: IncomingMessage, res: ServerResponse, next
     if (url.startsWith('/dev-auth/token') && req.method === 'POST') {
       const { email, name } = JSON.parse((await readBody(req)).toString() || '{}');
       const e = String(email || '').toLowerCase();
-      const id = 'local-' + Buffer.from(e).toString('hex').slice(0, 24);
+      const id = 'local-' + createHash('sha256').update(e).digest('hex').slice(0, 24);
       const token = await new SignJWT({ email: e, name: name || e.split('@')[0] })
         .setProtectedHeader({ alg: 'EdDSA', kid: 'local' })
         .setSubject(id)

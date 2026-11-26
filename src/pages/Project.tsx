@@ -3,8 +3,9 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api';
 import { useSession } from '../App';
 import { Avatar, COMMENT_STATUS, Dialog, Icon, NOTE_EVENTS, Pill, SET_STATUS, eventText, fmtDate, timeAgo, useToast } from '../ui';
+import { ProjectFields, toForm, type ProjectFormValue } from './ProjectForm';
 
-type Data = { project: any; sets: any[]; comments: any[]; events: any[]; members: any[] };
+type Data = { project: any; sets: any[]; comments: any[]; events: any[]; members: any[]; my_slots: string[] };
 
 export default function ProjectPage() {
   const { id } = useParams();
@@ -14,6 +15,7 @@ export default function ProjectPage() {
   const [d, setD] = useState<Data | null>(null);
   const [err, setErr] = useState('');
   const [editing, setEditing] = useState(false);
+  const [sending, setSending] = useState(false);
 
   const load = useCallback(() => api<Data>(`/projects/${id}`).then(setD).catch((e) => setErr(e.message)), [id]);
   useEffect(() => {
@@ -29,28 +31,22 @@ export default function ProjectPage() {
   const active = sets.find((x) => x.status !== 'sealed');
   const nextRev = sets.length ? sets[0].rev_number + 1 : 0;
 
-  async function newSet() {
-    try {
-      const set = await api(`/projects/${p.id}/sets`, { body: { title: '' } });
-      nav(`/sets/${set.id}`);
-    } catch (e: any) {
-      toast(e.message, true);
-    }
-  }
+  const isPM = d.my_slots.includes('pm');
+  const name = (id: string | null) => d.members.find((m) => m.user_id === id)?.name;
 
   return (
     <main className="content">
       <div className="page-h">
         <div>
-          <span className="label">{p.number || 'Project'}{p.permit_number ? ` · Permit ${p.permit_number}` : ''}</span>
+          <span className="label">{p.kind === 'modification' ? 'Modification' : 'Initial drawings'}{p.number ? ` · ${p.number}` : ''}{p.permit_number ? ` · Permit ${p.permit_number}` : ''}</span>
           <h1 style={{ marginTop: 8 }}>{p.name}</h1>
           <p className="hint">{[p.address, p.jurisdiction].filter(Boolean).join(' · ') || 'Add the site address and jurisdiction.'}</p>
         </div>
         <div className="row">
-          <button className="btn" onClick={() => setEditing(true)}>Edit details</button>
-          {!active && (
-            <button className="btn primary" onClick={newSet}>
-              <Icon name="plus" /> Start Rev {nextRev}
+          {isPM && <button className="btn" onClick={() => setEditing(true)}>Edit project and people</button>}
+          {!active && isPM && (
+            <button className="btn primary" onClick={() => setSending(true)}>
+              <Icon name="plus" /> Send Rev {nextRev} to drafter
             </button>
           )}
           {active && (
@@ -65,13 +61,41 @@ export default function ProjectPage() {
         <div className="col" style={{ gap: 22 }}>
           <section className="card">
             <div className="card-h">
+              <h2>People on this project</h2>
+              {isPM && <button className="btn sm" onClick={() => setEditing(true)}>Change</button>}
+            </div>
+            <div className="slots">
+              {[
+                ['PM', p.pm_id, 'Not set'],
+                ['Drafter', p.drafter_id, 'Not assigned'],
+                ['Architect', p.architect_id, 'Not assigned'],
+                ['Engineer', p.engineer_id, p.engineer_email ? `${p.engineer_name || p.engineer_email} (by email)` : 'Not assigned'],
+              ].map(([label, id, none]) => (
+                <div className="slot" key={label}>
+                  <Avatar name={name(id) || (label === 'Engineer' ? p.engineer_name || p.engineer_email : '') || '?'} />
+                  <div className="who">
+                    <div className="label">{label}{id === s.user.id && <span className="you">You</span>}</div>
+                    <div>{name(id) || none}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {p.requirements && (
+              <>
+                <div className="label" style={{ margin: '16px 0 8px' }}>Requirements</div>
+                <div className="brief">{p.requirements}</div>
+              </>
+            )}
+          </section>
+          <section className="card">
+            <div className="card-h">
               <h2>Revision sets</h2>
               <span className="hint">Each set pairs the PDF sheets with their DWG source.</span>
             </div>
             {sets.length === 0 ? (
               <div className="empty">
-                No sets yet. Start Rev 0 to upload the first drawings.
-                <div style={{ marginTop: 12 }}><button className="btn primary" onClick={newSet}><Icon name="plus" /> Start Rev 0</button></div>
+                {isPM ? 'No revisions yet. Send Rev 0 to the drafter with what needs to be drawn.' : 'No revisions yet. The project manager will send the first one.'}
+                {isPM && <div style={{ marginTop: 12 }}><button className="btn primary" onClick={() => setSending(true)}><Icon name="plus" /> Send Rev 0 to drafter</button></div>}
               </div>
             ) : (
               <div className="queue">
@@ -115,37 +139,79 @@ export default function ProjectPage() {
         </section>
       </div>
       {editing && <EditProject project={p} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); load(); }} />}
+      {sending && <SendToDrafter project={p} rev={nextRev} drafter={name(p.drafter_id)} onClose={() => setSending(false)} onSent={(id) => nav(`/sets/${id}`)} onEdit={() => { setSending(false); setEditing(true); }} />}
     </main>
   );
 }
 
 function EditProject({ project, onClose, onSaved }: { project: any; onClose: () => void; onSaved: () => void }) {
-  const [f, setF] = useState({ name: project.name, number: project.number, address: project.address, jurisdiction: project.jurisdiction, permit_number: project.permit_number });
+  const s = useSession();
+  const [f, setF] = useState<ProjectFormValue>(toForm(project, s.user.id));
   const [err, setErr] = useState('');
-  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     try {
-      await api(`/projects/${project.id}`, { method: 'PATCH', body: f });
+      await api(`/projects/${project.id}`, {
+        method: 'PATCH',
+        body: { ...f, pm_id: f.pm_id || null, drafter_id: f.drafter_id || null, architect_id: f.architect_id || null, engineer_id: f.engineer_id || null },
+      });
       onSaved();
     } catch (e: any) {
       setErr(e.message);
     }
   }
   return (
-    <Dialog title="Project details" onClose={onClose}>
+    <Dialog title="Project and people" onClose={onClose} wide>
       <form onSubmit={submit}>
-        <div className="form-grid">
-          <label className="field wide"><span>Project name</span><input className="input" value={f.name} onChange={set('name')} required /></label>
-          <label className="field"><span>Project number</span><input className="input" value={f.number} onChange={set('number')} /></label>
-          <label className="field"><span>Permit number</span><input className="input" value={f.permit_number} onChange={set('permit_number')} /></label>
-          <label className="field wide"><span>Site address</span><input className="input" value={f.address} onChange={set('address')} /></label>
-          <label className="field wide"><span>Jurisdiction</span><input className="input" value={f.jurisdiction} onChange={set('jurisdiction')} /></label>
-        </div>
+        <ProjectFields f={f} setF={setF} />
         {err && <p className="err">{err}</p>}
         <div className="foot">
           <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
           <button className="btn primary">Save</button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+function SendToDrafter({ project, rev, drafter, onClose, onSent, onEdit }: {
+  project: any; rev: number; drafter?: string; onClose: () => void; onSent: (id: string) => void; onEdit: () => void;
+}) {
+  const [title, setTitle] = useState(rev === 0 ? (project.kind === 'modification' ? 'Modification' : 'Initial drawings') : '');
+  const [brief, setBrief] = useState(rev === 0 ? project.requirements : '');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  if (!drafter)
+    return (
+      <Dialog title={`Send Rev ${rev} to a drafter`} onClose={onClose}>
+        <p>Pick a drafter for this project first.</p>
+        <div className="foot"><button className="btn ghost" onClick={onClose}>Cancel</button><button className="btn primary" onClick={onEdit}>Assign a drafter</button></div>
+      </Dialog>
+    );
+  async function send(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const set = await api(`/projects/${project.id}/sets`, { body: { title, brief } });
+      onSent(set.id);
+    } catch (e: any) {
+      setErr(e.message);
+      setBusy(false);
+    }
+  }
+  return (
+    <Dialog title={`Send Rev ${rev} to ${drafter}`} onClose={onClose} wide>
+      <form onSubmit={send} className="col">
+        <label className="field"><span>Title</span><input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Permit set, City comments round 1…" /></label>
+        <label className="field">
+          <span>What the drafter needs to do</span>
+          <textarea className="input" style={{ minHeight: 160 }} value={brief} onChange={(e) => setBrief(e.target.value)} required placeholder="List the drawings or changes, standards to follow, and the due date." />
+        </label>
+        <p className="hint" style={{ margin: 0 }}>After sending, you can attach reference drawings on the revision page.</p>
+        {err && <p className="err">{err}</p>}
+        <div className="foot">
+          <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
+          <button className="btn primary" disabled={busy}>{busy ? 'Sending…' : 'Send to drafter'}</button>
         </div>
       </form>
     </Dialog>

@@ -10,13 +10,17 @@ Permit workspace for architecture and engineering firms: revision sets that pair
 - **Sign-in:** Neon Auth (Managed Better Auth). The browser signs in with Neon Auth; the API verifies its JWT against the JWKS.
 - **Files:** Neon Object Storage (S3-compatible). The browser uploads straight to storage with a presigned URL; every file's SHA-256 is recorded.
 
-## How access works
+## How the workflow runs
 
-- Each user belongs to one or more firms through `memberships` (role: drafter, architect or engineer; plus an admin flag).
-- Admins invite by email. When someone signs in with that email, they join the firm automatically. No emails are sent yet.
-- Every query is scoped to the caller's firm (`x-arc-firm` header picks the active firm).
-- Review chain: draft → architect review → engineer review → sealed. Either reviewer can return the set with a note. Only the engineer can upload the sealed PDF and seal. Sealed sets are locked.
-- Firm admins can switch their own role from the top bar so one person can run every step while testing.
+- Each firm member has a usual job (project manager, drafter, architect, engineer) and an admin flag. Admins invite by email; people join automatically when they sign in with that email. No emails are sent yet.
+- **Every project names its PM, drafter, architect and engineer.** One person can fill several slots (for example PM and architect). Firm admins can always act as PM.
+- The PM sets the project type (initial drawings or modification) and requirements, then sends each revision to the drafter with instructions and reference files.
+- Review loop (`revision_sets.status`):
+  `draft` (drafter) → `pm_review` (PM checks) → `architect_review` → `engineer_review` (ready for stamp) → `sealed`.
+  The PM can send work back to the drafter. The architect, or the engineer, sends rework and markups to the PM (`pm_rework`). The PM forwards them to the drafter or resubmits to the architect.
+- Drafters (non-admin) only see projects they are assigned to, and don't see the architect's markups or notes until the PM forwards them.
+- **Engineer stamp:** an engineer with an account seals in the app. For engineers not on Arc yet, the PM or architect creates a stamp link (`/stamp/<token>`, valid 30 days, one active per set). Arc opens a prefilled Gmail draft with the link. The engineer downloads the set, uploads the stamped PDF and returns it, or sends notes back, with no account. Only a SHA-256 of the token is stored.
+- Every query is scoped to the caller's firm (`x-arc-firm` header picks the active firm). Sealed sets are locked.
 
 ## Run locally
 

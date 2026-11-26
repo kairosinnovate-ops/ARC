@@ -2,11 +2,12 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { BrowserRouter, Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { auth, type SessionUser } from './auth';
 import { api, setFirm } from './api';
-import { Avatar, Icon, ROLE_LABEL, ToastProvider, useToast, type Role } from './ui';
+import { Avatar, Icon, ROLE_LABEL, ToastProvider, type Role } from './ui';
 import ProjectsPage from './pages/Projects';
 import ProjectPage from './pages/Project';
 import SetPage from './pages/RevisionSet';
 import TeamPage from './pages/Team';
+import StampPage from './pages/Stamp';
 
 export type Firm = { firm_id: string; firm_name: string; role: Role; is_admin: boolean };
 type Session = {
@@ -34,7 +35,10 @@ export default function App() {
   return (
     <ToastProvider>
       <BrowserRouter>
-        <Boot />
+        <Routes>
+          <Route path="/stamp/:token" element={<StampPage />} />
+          <Route path="*" element={<Boot />} />
+        </Routes>
       </BrowserRouter>
     </ToastProvider>
   );
@@ -184,7 +188,7 @@ function SignIn({ onDone }: { onDone: () => void }) {
 
 function CreateFirm({ user, onDone }: { user: SessionUser; onDone: () => Promise<void> }) {
   const [name, setName] = useState('');
-  const [role, setRole] = useState<Role>('architect');
+  const [role, setRole] = useState<Role>('pm');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   async function submit(e: React.FormEvent) {
@@ -238,7 +242,6 @@ function CreateFirm({ user, onDone }: { user: SessionUser; onDone: () => Promise
 function Shell() {
   const s = useSession();
   const [ck, setCk] = useState(false);
-  const toast = useToast();
   const loc = useLocation();
 
   useEffect(() => {
@@ -252,16 +255,6 @@ function Shell() {
     return () => window.removeEventListener('keydown', k);
   }, []);
   useEffect(() => setCk(false), [loc.pathname]);
-
-  async function switchRole(role: Role) {
-    try {
-      await api(`/team/members/${encodeURIComponent(s.user.id)}`, { method: 'PATCH', body: { role } });
-      await s.reload();
-      toast(`You are now acting as ${ROLE_LABEL[role]}.`);
-    } catch (e: any) {
-      toast(e.message, true);
-    }
-  }
 
   const isMac = navigator.platform.toLowerCase().includes('mac');
   return (
@@ -296,17 +289,7 @@ function Shell() {
             </button>
           </div>
           <div className="as">
-            {s.firm.is_admin ? (
-              <div className="seg" aria-label="Act as role" title="Firm admins can switch roles to run each step">
-                {(Object.keys(ROLE_LABEL) as Role[]).map((r) => (
-                  <button key={r} className={s.firm.role === r ? 'on' : ''} onClick={() => s.firm.role !== r && switchRole(r)}>
-                    {ROLE_LABEL[r]}
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <span className="hint">{ROLE_LABEL[s.firm.role]}</span>
-            )}
+            <span className="hint">{ROLE_LABEL[s.firm.role]}{s.firm.is_admin ? ' · Admin' : ''}</span>
             <Avatar name={s.user.name} />
           </div>
         </header>

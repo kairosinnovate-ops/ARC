@@ -1,13 +1,14 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 
-export type Role = 'drafter' | 'architect' | 'engineer';
-export const ROLE_LABEL: Record<Role, string> = { drafter: 'Drafter', architect: 'Architect', engineer: 'Engineer' };
+export type Role = 'pm' | 'drafter' | 'architect' | 'engineer';
+export const ROLE_LABEL: Record<Role, string> = { pm: 'Project manager', drafter: 'Drafter', architect: 'Architect', engineer: 'Engineer' };
 
 export const SET_STATUS: Record<string, string> = {
-  draft: 'Draft',
+  draft: 'With drafter',
+  pm_review: 'PM check',
   architect_review: 'Architect review',
-  returned: 'Returned',
-  engineer_review: 'With engineer',
+  pm_rework: 'Rework with PM',
+  engineer_review: 'Ready for stamp',
   sealed: 'Sealed',
 };
 export const COMMENT_STATUS: Record<string, string> = { open: 'Open', in_progress: 'In progress', addressed: 'Addressed' };
@@ -121,9 +122,16 @@ const EVENT_TEXT: Record<string, string> = {
   set_created: 'started',
   file_uploaded: 'uploaded',
   file_removed: 'removed',
-  submitted: 'submitted the set for architect review',
-  approved: 'approved and sent the set to the engineer',
-  returned: 'returned the set for changes',
+  sent_to_drafter: 'sent the revision to the drafter',
+  drafter_assigned: 'changed the drafter',
+  submitted: 'submitted the drawings to the PM',
+  pm_approved: 'checked the set and sent it to the architect',
+  pm_returned: 'sent the set back to the drafter',
+  architect_approved: 'approved the set. It is ready for stamp',
+  architect_returned: 'sent markups back to the PM',
+  engineer_returned: 'sent the set back to the PM',
+  markup_uploaded: 'added a markup',
+  stamp_link_sent: 'sent the stamp link to',
   sealed_uploaded: 'uploaded the sealed set',
   sealed: 'sealed and locked the set',
   comment_added: 'logged city comment',
@@ -136,4 +144,4 @@ const EVENT_TEXT: Record<string, string> = {
 export function eventText(action: string) {
   return EVENT_TEXT[action] || action.replace(/_/g, ' ');
 }
-export const NOTE_EVENTS = new Set(['returned', 'submitted', 'approved', 'sealed']);
+export const NOTE_EVENTS = new Set(['sent_to_drafter', 'submitted', 'pm_approved', 'pm_returned', 'architect_approved', 'architect_returned', 'engineer_returned', 'sealed']);

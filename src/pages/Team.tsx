@@ -60,7 +60,7 @@ export default function TeamPage() {
         <div>
           <span className="label">{s.firm.firm_name}</span>
           <h1 style={{ marginTop: 8 }}>Team</h1>
-          <p className="hint">Roles decide who can take each step: drafters submit, architects approve or return, engineers seal.</p>
+          <p className="hint">Each person's role here is their usual job. Who does what on a project is set on each project's page. Drafters only see the projects they're assigned to.</p>
         </div>
       </div>
       <div className="grid2">

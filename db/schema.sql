@@ -116,3 +116,57 @@ create table if not exists city_comments (
   created_at timestamptz not null default now()
 );
 create index if not exists comments_project_idx on city_comments(project_id);
+
+-- ---------------------------------------------------------------------------
+-- v2 (2026-11-26): project manager workflow and engineer stamp links.
+-- Every project names its PM, drafter, architect and engineer. One person can hold several slots.
+-- ---------------------------------------------------------------------------
+alter table memberships drop constraint if exists memberships_role_check;
+alter table memberships add constraint memberships_role_check check (role in ('pm','drafter','architect','engineer'));
+alter table invites drop constraint if exists invites_role_check;
+alter table invites add constraint invites_role_check check (role in ('pm','drafter','architect','engineer'));
+
+alter table projects add column if not exists kind text not null default 'initial';
+alter table projects drop constraint if exists projects_kind_check;
+alter table projects add constraint projects_kind_check check (kind in ('initial','modification'));
+alter table projects add column if not exists requirements text not null default '';
+alter table projects add column if not exists pm_id text;
+alter table projects add column if not exists drafter_id text;
+alter table projects add column if not exists architect_id text;
+alter table projects add column if not exists engineer_id text;
+alter table projects add column if not exists engineer_name text not null default '';
+alter table projects add column if not exists engineer_email text not null default '';
+update projects set pm_id = created_by where pm_id is null;
+
+-- draft = with the drafter; pm_review = drafter submitted to the PM; architect_review;
+-- pm_rework = architect (or engineer) sent markups back to the PM; engineer_review = ready for stamp; sealed.
+alter table revision_sets drop constraint if exists revision_sets_status_check;
+update revision_sets set status = 'draft' where status = 'returned';
+alter table revision_sets add constraint revision_sets_status_check
+  check (status in ('draft','pm_review','architect_review','pm_rework','engineer_review','sealed'));
+alter table revision_sets add column if not exists brief text not null default '';
+alter table revision_sets add column if not exists sealed_by_name text not null default '';
+alter table revision_sets add column if not exists sealed_via text not null default '';
+alter table revision_sets add column if not exists engineer_license text not null default '';
+
+alter table files drop constraint if exists files_kind_check;
+alter table files add constraint files_kind_check check (kind in ('pdf','dwg','sealed_pdf','reference','markup','other'));
+-- Architect markups stay between the architect and PM until the PM forwards them to the drafter.
+alter table files add column if not exists shared_with_drafter boolean not null default true;
+
+-- One-time links that let an engineer without an account download the set and upload the stamped PDF.
+create table if not exists stamp_requests (
+  id uuid primary key default gen_random_uuid(),
+  firm_id uuid not null references firms(id) on delete cascade,
+  project_id uuid not null references projects(id) on delete cascade,
+  revision_set_id uuid not null references revision_sets(id) on delete cascade,
+  token_hash text not null unique,
+  engineer_name text not null default '',
+  engineer_email text not null default '',
+  created_by text not null,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  used_at timestamptz,
+  revoked_at timestamptz
+);
+create index if not exists stamp_requests_set_idx on stamp_requests(revision_set_id)
