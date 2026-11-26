@@ -398,7 +398,26 @@ async function getProject(ctx: Ctx) {
 function redactEvents(events: any[], slots: string[]) {
   const onlyDrafter = slots.length === 1 && slots[0] === 'drafter';
   if (!onlyDrafter) return events;
-  return events.map((e) => (['architect_returned', 'engineer_returned'].includes(e.action) ? { ...e, note: '' } : e));
+  return events
+    .filter((e) => e.action !== 'review_note')
+    .map((e) => (['architect_returned', 'engineer_returned'].includes(e.action) ? { ...e, note: '' } : e));
+}
+
+/**
+ * A note on the review thread. The PM's and drafter's notes are visible to the whole chain (note_added).
+ * Notes from the architect or engineer stay between the reviewers and the PM (review_note); the drafter
+ * hears about them through the PM, the same way markups reach them.
+ */
+async function addSetNote(ctx: Ctx) {
+  const m = firmOf(ctx);
+  const { s, p } = await loadSet(m, ctx.params[0], ctx.user.id);
+  const slots = slotsOf(p, m, ctx.user.id);
+  if (!slots.size) throw forbidden('Only people on this project can add notes.');
+  const note = str(ctx.body.note, 4000);
+  if (!note) throw bad('Write a note first.');
+  const reviewerOnly = !slots.has('pm') && !slots.has('drafter');
+  await log(m, ctx.user, s.project_id, s.id, reviewerOnly ? 'review_note' : 'note_added', note);
+  return json({ ok: true }, 201);
 }
 
 async function updateProject(ctx: Ctx) {
@@ -1146,6 +1165,7 @@ const routes: [string, RegExp, Handler][] = [
   ['PATCH', new RegExp(`^/sets/${ID}$`), updateSet],
   ['POST', new RegExp(`^/sets/${ID}/files$`), startUpload],
   ['POST', new RegExp(`^/sets/${ID}/action$`), setAction],
+  ['POST', new RegExp(`^/sets/${ID}/notes$`), addSetNote],
   ['POST', new RegExp(`^/sets/${ID}/stamp-links$`), createStampLink],
   ['DELETE', new RegExp(`^/stamp-links/${ID}$`), revokeStampLink],
   ['POST', new RegExp(`^/sets/${ID}/client-links$`), createClientLink],

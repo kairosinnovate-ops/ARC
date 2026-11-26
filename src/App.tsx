@@ -185,6 +185,7 @@ function SignIn({ onDone }: { onDone: () => void }) {
         </div>
         {dev && <div className="hint" style={{ textAlign: 'center' }}>Local mode: any email signs in.</div>}
       </form>
+      <SheetTag />
     </div>
   );
 }
@@ -238,6 +239,18 @@ function CreateFirm({ user, onDone }: { user: SessionUser; onDone: () => Promise
           Sign out
         </button>
       </form>
+      <SheetTag />
+    </div>
+  );
+}
+
+/** A title-block corner, like the bottom right of a drawing sheet. */
+function SheetTag() {
+  return (
+    <div className="sheet-tag" aria-hidden="true">
+      <span>Arc</span>
+      <span>Permit workspace</span>
+      <span>Sheet A-0</span>
     </div>
   );
 }
