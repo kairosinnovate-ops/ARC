@@ -142,15 +142,16 @@ update projects set pm_id = created_by where pm_id is null;
 -- pm_rework = architect (or engineer) sent markups back to the PM; engineer_review = ready for stamp; sealed.
 alter table revision_sets drop constraint if exists revision_sets_status_check;
 update revision_sets set status = 'draft' where status = 'returned';
+-- (Includes the v4 statuses so re-running this file stays safe.)
 alter table revision_sets add constraint revision_sets_status_check
-  check (status in ('draft','pm_review','architect_review','pm_rework','engineer_review','sealed'));
+  check (status in ('intake','draft','pm_review','architect_review','pm_rework','final_record','engineer_review','sealed'));
 alter table revision_sets add column if not exists brief text not null default '';
 alter table revision_sets add column if not exists sealed_by_name text not null default '';
 alter table revision_sets add column if not exists sealed_via text not null default '';
 alter table revision_sets add column if not exists engineer_license text not null default '';
 
 alter table files drop constraint if exists files_kind_check;
-alter table files add constraint files_kind_check check (kind in ('pdf','dwg','sealed_pdf','reference','markup','other'));
+alter table files add constraint files_kind_check check (kind in ('pdf','dwg','sealed_pdf','reference','markup','final_pdf','final_cad','other'));
 -- Architect markups stay between the architect and PM until the PM forwards them to the drafter.
 alter table files add column if not exists shared_with_drafter boolean not null default true;
 
@@ -218,3 +219,11 @@ create table if not exists client_links (
   revoked_at timestamptz
 );
 create index if not exists client_links_set_idx on client_links(revision_set_id)
+;
+
+-- v5 (2026-11-26): set type replaces "drawings are for". permit / construction / permit_construction.
+update projects set purpose = case purpose when 'permit_sale' then 'permit' when 'sale' then 'permit' when '' then 'permit' else purpose end
+  where purpose not in ('permit', 'construction', 'permit_construction');
+alter table projects alter column purpose set default 'permit';
+alter table projects drop constraint if exists projects_purpose_check;
+alter table projects add constraint projects_purpose_check check (purpose in ('permit','construction','permit_construction'))

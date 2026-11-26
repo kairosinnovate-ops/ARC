@@ -13,7 +13,7 @@ export const SET_STATUS: Record<string, string> = {
   engineer_review: 'Ready for stamp',
   sealed: 'Sealed',
 };
-export const PURPOSE: Record<string, string> = { permit: 'For permit', sale: 'For sale', permit_sale: 'For permit and sale' };
+export const PURPOSE: Record<string, string> = { permit: 'Permit set', construction: 'Construction set', permit_construction: 'Permit + construction' };
 const KIND_LABEL: Record<string, string> = { pdf: 'PDF', dwg: 'DWG', final_pdf: 'PDF', final_cad: 'CAD', sealed_pdf: 'SEALED', reference: 'REF', markup: 'MARKUP', other: 'FILE' };
 export const kindLabel = (k: string) => KIND_LABEL[k] || k.toUpperCase();
 export const COMMENT_STATUS: Record<string, string> = { open: 'Open', in_progress: 'In progress', addressed: 'Addressed' };

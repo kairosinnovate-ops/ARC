@@ -9,7 +9,7 @@ const EMPTY = {
   name: '', number: '', address: '', jurisdiction: '', permit_number: '',
   kind: 'initial', requirements: '',
   pm_id: '', drafter_id: '', architect_id: '', engineer_id: '', engineer_name: '', engineer_email: '',
-  purpose: '', client_name: '', client_email: '',
+  purpose: 'permit', client_name: '', client_email: '',
 };
 export type ProjectFormValue = typeof EMPTY;
 
@@ -17,6 +17,7 @@ export function toForm(p: any | null, me: string): ProjectFormValue {
   if (!p) return { ...EMPTY, pm_id: me };
   const out: any = { ...EMPTY };
   for (const k of Object.keys(EMPTY)) out[k] = p[k] ?? '';
+  if (!out.purpose) out.purpose = 'permit';
   return out;
 }
 
@@ -60,10 +61,10 @@ export function ProjectFields({ f, setF }: { f: ProjectFormValue; setF: (f: Proj
         </div>
       </div>
       <div className="field wide">
-        <span>Drawings are for</span>
+        <span>Set type</span>
         <div className="seg" role="radiogroup">
           {Object.entries(PURPOSE).map(([k, l]) => (
-            <button type="button" key={k} className={f.purpose === k ? 'on' : ''} role="radio" aria-checked={f.purpose === k} onClick={() => setF({ ...f, purpose: f.purpose === k ? '' : k })}>{l}</button>
+            <button type="button" key={k} className={f.purpose === k ? 'on' : ''} role="radio" aria-checked={f.purpose === k} onClick={() => setF({ ...f, purpose: k })}>{l}</button>
           ))}
         </div>
       </div>

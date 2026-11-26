@@ -211,3 +211,6 @@ ok((await PM(`/projects/${p.id}`)).project.client_email === 'owner@client.test',
 await PM(`/client-links/${rs.client_links[0].id}`, 'DELETE');
 ok((await fetch(`${B}/api/public/delivery/${ctoken}`)).status === 404, 'turned-off client link stops working');
 ok((await PM(`/sets/${set1.id}/client-links`, 'POST', { email: 'x@client.test' })).status === 201, 'any sealed set can be delivered');
+ok(p.purpose === 'permit' || (await PM(`/projects/${p.id}`)).project.purpose === 'permit', 'set type defaults to permit set');
+ok((await PM(`/projects/${p.id}`, 'PATCH', { purpose: 'sale' })).status === 400, 'old "for sale" type is rejected');
+ok((await PM(`/projects/${p.id}`, 'PATCH', { purpose: 'permit_construction' })).purpose === 'permit_construction', 'PM sets permit + construction');

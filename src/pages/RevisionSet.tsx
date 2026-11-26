@@ -335,7 +335,7 @@ function ActionBox(props: {
     return (
       <section className="card actionbox col">
         <div><b>Set the scope.</b> <span className="hint">Review the site notes and sketches below, then tell {name(p.drafter_id) || 'the drafter'} what to draw.</span></div>
-        <textarea className="input" style={{ minHeight: 120 }} placeholder="What to draw, for permit or for sale, standards to follow, due date." value={scope} onChange={(e) => setScope(e.target.value)} />
+        <textarea className="input" style={{ minHeight: 120 }} placeholder="What to draw, permit or construction set, standards to follow, due date." value={scope} onChange={(e) => setScope(e.target.value)} />
         <div className="row">
           <button className="btn primary" disabled={busy || !scope.trim() || !p.drafter_id} onClick={() => act('send_to_drafter', { note: scope })}><Icon name="check" /> Send scope to drafter</button>
           {!p.drafter_id && <span className="hint">Assign a drafter on the project page first.</span>}

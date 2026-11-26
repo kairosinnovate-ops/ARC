@@ -273,8 +273,8 @@ function projectFields(b: any, cur: any = {}) {
   if (engineerEmail && !EMAIL.test(engineerEmail)) throw bad('Enter a valid engineer email.');
   const clientEmail = pick('client_email', 200).toLowerCase();
   if (clientEmail && !EMAIL.test(clientEmail)) throw bad('Enter a valid client email.');
-  const purpose = b.purpose !== undefined ? str(b.purpose, 20) : cur.purpose ?? '';
-  if (!['', 'permit', 'sale', 'permit_sale'].includes(purpose)) throw bad('Pick what the drawings are for.');
+  const purpose = (b.purpose !== undefined ? str(b.purpose, 30) : cur.purpose) || 'permit';
+  if (!['permit', 'construction', 'permit_construction'].includes(purpose)) throw bad('Pick the type of set: permit, construction, or both.');
   return {
     name: pick('name', 200),
     number: pick('number', 60),
