@@ -211,8 +211,10 @@ const EVENT_TEXT: Record<string, string> = {
   comment_deleted: 'deleted comment',
   project_deleted: 'moved the project to Trash',
   project_restored: 'restored the project from Trash',
+  note_added: 'left a note',
+  review_note: 'left a reviewer note',
 };
 export function eventText(action: string) {
   return EVENT_TEXT[action] || action.replace(/_/g, ' ');
 }
-export const NOTE_EVENTS = new Set(['intake_started', 'sent_to_drafter', 'submitted', 'pm_approved', 'pm_returned', 'architect_approved', 'architect_returned', 'engineer_returned', 'sealed']);
+export const NOTE_EVENTS = new Set(['intake_started', 'sent_to_drafter', 'submitted', 'pm_approved', 'pm_returned', 'architect_approved', 'architect_returned', 'engineer_returned', 'sealed', 'note_added', 'review_note']);

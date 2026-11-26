@@ -196,7 +196,23 @@ button.qi { width: 100%; text-align: left; }
 .ck li .g { color: var(--faint); font-size: 12px; }
 
 /* Auth screens */
-.auth { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; background: radial-gradient(80% 60% at 50% 0%, rgba(90,123,170,.18), transparent 70%), var(--paper); }
+/* A ghost of a permit sheet behind the first screens: Mastan's A-1 plan and elevations, a drafting grid, and
+   a soft clearing in the middle so the card stays clean. */
+.auth { position: relative; isolation: isolate; min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; background: radial-gradient(80% 60% at 50% 0%, rgba(90,123,170,.18), transparent 70%), var(--paper); }
+.auth::before { content: ""; position: fixed; inset: -2%; z-index: -1; pointer-events: none;
+  background: url(/drawing-texture.webp) center / cover no-repeat; opacity: .1;
+  -webkit-mask-image: radial-gradient(42% 46% at 50% 50%, transparent 0, rgba(0,0,0,.35) 55%, #000 100%);
+          mask-image: radial-gradient(42% 46% at 50% 50%, transparent 0, rgba(0,0,0,.35) 55%, #000 100%);
+  animation: drift 60s ease-in-out infinite alternate; }
+.auth::after { content: ""; position: fixed; inset: 0; z-index: -2; pointer-events: none;
+  background-image: linear-gradient(rgba(141,168,206,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(141,168,206,.035) 1px, transparent 1px);
+  background-size: 32px 32px; }
+@keyframes drift { from { transform: scale(1.02) translate(0, 0); } to { transform: scale(1.06) translate(-1%, -1%); } }
+.auth > .card { animation: rise .5s var(--ease) both; background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.sheet-tag { position: fixed; right: 20px; bottom: 16px; z-index: 0; display: flex; border: 1px solid rgba(141,168,206,.16); border-radius: 4px; font-family: var(--f-mono); font-size: 10px; letter-spacing: .12em; color: var(--faint); text-transform: uppercase; pointer-events: none; }
+.sheet-tag span { padding: 5px 9px; }
+.sheet-tag span + span { border-left: 1px solid rgba(141,168,206,.16); }
+@media (max-width: 600px) { .auth::before { opacity: .08; background-position: 30% center; } .sheet-tag { display: none; } }
 .auth .card { width: min(420px, 100%); padding: 28px; }
 .auth h1 { font-size: 26px; letter-spacing: -.03em; }
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--raise); border: 1px solid var(--line-2); padding: 10px 16px; border-radius: 10px; box-shadow: var(--sh-2); z-index: 60; font-size: 13px; animation: rise .25s var(--ease); }
@@ -261,3 +277,83 @@ button.qi { width: 100%; text-align: left; }
 .waiting.yours { color: var(--ink); font-weight: 500; }
 .turn { font-size: 11px; font-weight: 600; letter-spacing: .02em; padding: 2px 8px; border-radius: 6px; background: var(--accent); color: var(--paper); }
 .pcard.mine { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: radial-gradient(120% 120% at 0% 0%, var(--accent-soft), transparent 60%), var(--surface); }
+
+/* Whose turn it is, on the revision page */
+.step { transition: opacity .3s; }
+.step.later { opacity: .45; }
+.step.done { opacity: .8; }
+.step.now .dot { animation: pulse 2.4s ease-in-out infinite, land .6s var(--ease) both; }
+.step.now .t { color: var(--ink); }
+.step.mine .t { color: var(--accent); }
+.step .turn { display: inline-block; margin-top: 6px; white-space: nowrap; }
+.step.back.now .dot { box-shadow: 0 0 0 5px var(--amber-soft); }
+@keyframes land { from { transform: scale(.4); } 60% { transform: scale(1.25); } to { transform: none; } }
+.court { display: flex; align-items: center; gap: 10px; margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--line-2); font-size: 13px; }
+.court .av { box-shadow: none; font-size: 9px; }
+.court .ball { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-ring); animation: pulse 2.4s ease-in-out infinite; flex: none; margin: 0 6px; }
+.actionbox.mine { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); box-shadow: var(--sh-1), 0 0 0 4px var(--accent-soft); animation: rise .45s var(--ease) both, glow 1.8s ease-out .2s 1; }
+@keyframes glow { 0% { box-shadow: var(--sh-1), 0 0 0 0 var(--accent-ring); } 100% { box-shadow: var(--sh-1), 0 0 0 4px var(--accent-soft); } }
+
+/* The hand-off: a sheet travels from one person to the next */
+.flight { position: fixed; left: 50%; top: 88px; transform: translateX(-50%); z-index: 70; width: min(440px, calc(100vw - 32px)); background: var(--raise); border: 1px solid var(--line-2); border-radius: 16px; padding: 18px 20px 16px; box-shadow: var(--sh-2), 0 0 0 6px rgba(12,21,38,.5); animation: flightIn .35s var(--ease) both, flightOut .4s ease-in 2.2s forwards; cursor: pointer; }
+.flight .lane { display: grid; grid-template-columns: 76px minmax(0,1fr) 76px; align-items: center; }
+.flight .who { display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); text-align: center; min-width: 0; }
+.flight .who > span:last-child { max-width: 76px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flight .av { box-shadow: 0 0 0 2px var(--raise); font-size: 12px; }
+.flight .seal-av { background: var(--seal); color: var(--paper); }
+.flight .track { position: relative; height: 38px; margin: 0 -4px 18px; }
+.flight .track::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; border-top: 2px dashed var(--line-2); }
+.flight .track::after { content: ""; position: absolute; left: 0; top: calc(50% - 1px); height: 2px; width: 0; background: var(--accent); animation: trail 1.3s var(--ease) .25s forwards; }
+.flight .sheet { position: absolute; top: 50%; left: 0; width: 30px; height: 36px; margin-top: -18px; border-radius: 4px; display: grid; place-items: center; background: var(--paper); border: 1.5px solid var(--accent); color: var(--accent); z-index: 1; animation: travel 1.3s var(--ease) .25s both; }
+.flight.back .track::after { background: var(--amber); }
+.flight.back .sheet { border-color: var(--amber); color: var(--amber); }
+.flight.seal .track::after { background: var(--seal); }
+.flight.seal .sheet { border-color: var(--seal); color: var(--seal); }
+.flight .msg { text-align: center; font-size: 14px; }
+@keyframes travel { from { left: 0; transform: rotate(-6deg); } 50% { transform: translateY(-8px) rotate(4deg); } to { left: calc(100% - 30px); transform: none; } }
+@keyframes trail { to { width: 100%; } }
+@keyframes flightIn { from { opacity: 0; transform: translate(-50%, -12px) scale(.97); } }
+@keyframes flightOut { to { opacity: 0; transform: translate(-50%, -8px); } }
+
+/* Review thread */
+.thread-card { display: flex; flex-direction: column; }
+.thread { display: flex; flex-direction: column; gap: 12px; font-size: 13px; max-height: 620px; overflow-y: auto; margin: 0 -8px; padding: 2px 8px; }
+.thread .earlier { align-self: center; font-size: 12px; }
+.thread .av { width: 26px; height: 26px; font-size: 9.5px; }
+.thread time { color: var(--faint); font-size: 11.5px; margin-left: auto; white-space: nowrap; }
+.thread .hl { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.thread .hl b { font-weight: 500; }
+.thread .b { min-width: 0; flex: 1; }
+.thread .bubble { margin-top: 6px; padding: 8px 11px; border-radius: 4px 12px 12px 12px; background: var(--sunk); border: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; }
+.rd { display: flex; align-items: center; gap: 10px; color: var(--faint); font-size: 10.5px; text-transform: uppercase; letter-spacing: .12em; font-weight: 600; margin-top: 4px; }
+.rd::before, .rd::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+.hand { display: flex; gap: 10px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: linear-gradient(90deg, var(--accent-soft), transparent 70%); }
+.hand.back { background: linear-gradient(90deg, var(--amber-soft), transparent 70%); border-color: color-mix(in srgb, var(--amber) 22%, var(--line)); }
+.hand.seal { background: linear-gradient(90deg, var(--seal-soft), transparent 70%); border-color: color-mix(in srgb, var(--seal) 25%, var(--line)); }
+.hand .arrow { color: var(--accent); display: inline-flex; font-weight: 600; }
+.hand.back .arrow { color: var(--amber); }
+.hand.seal .arrow { color: var(--seal); }
+.hand .what { color: var(--muted); font-size: 12.5px; }
+.hand .bubble { background: color-mix(in srgb, var(--paper) 60%, transparent); }
+.nt { display: flex; gap: 10px; }
+.nt.mine { justify-content: flex-end; }
+.nt.mine .b { flex: 0 1 85%; }
+.nt.mine .hl { justify-content: flex-end; }
+.nt.mine time { margin-left: 0; }
+.nt.mine .bubble { border-radius: 12px 4px 12px 12px; background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 25%, var(--line)); }
+.nt .tag { display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; color: var(--amber); border: 1px solid color-mix(in srgb, var(--amber) 30%, var(--line)); border-radius: 5px; padding: 0 5px; }
+.sm { display: flex; align-items: baseline; gap: 10px; color: var(--muted); font-size: 12.5px; padding-left: 10px; }
+.sm .dotline { width: 6px; height: 6px; border-radius: 50%; background: var(--line-2); flex: none; transform: translateY(-1px); }
+.sm > span:nth-child(2) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.fresh { animation: slideIn .5s var(--ease) both; }
+.hand.fresh { animation: slideIn .5s var(--ease) both, flash 1.6s ease-out .3s; }
+@keyframes slideIn { from { opacity: 0; transform: translateY(10px); } }
+@keyframes flash { from { box-shadow: 0 0 0 3px var(--accent-ring); } to { box-shadow: 0 0 0 0 transparent; } }
+.composer { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.composer textarea.input { min-height: 56px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .auth::before, .flight, .flight .sheet, .flight .track::after, .step.now .dot, .court .ball, .actionbox.mine, .fresh, .hand.fresh { animation: none !important; }
+  .flight .sheet { left: calc(100% - 30px); }
+  .flight .track::after { width: 100%; }
+}

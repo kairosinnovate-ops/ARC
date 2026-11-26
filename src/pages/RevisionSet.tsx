@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api, download, uploadFile } from '../api';
 import { useSession } from '../App';
-import { Avatar, Icon, NOTE_EVENTS, Pill, SET_STATUS, eventText, fmtBytes, fmtDate, kindLabel, timeAgo, useToast } from '../ui';
+import { Avatar, Icon, Pill, SET_STATUS, fmtBytes, fmtDate, kindLabel, timeAgo, useToast } from '../ui';
+import { HandoffFlight, ReviewThread, TURN, flightFor, holder, type Flight } from '../handoff';
 
 type Data = { set: any; project: any; files: any[]; events: any[]; members: any[]; my_slots: string[]; stamp_requests: any[]; client_links: any[] };
 type Pending = { name: string; pct: number; error?: string };
@@ -23,11 +24,32 @@ export default function SetPage() {
   const [pending, setPending] = useState<Pending[]>([]);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
+  const [flight, setFlight] = useState<Flight | null>(null);
+  const lastStatus = useRef<string | null>(null);
+  const acting = useRef(false);
 
   const load = useCallback(() => api<Data>(`/sets/${id}`).then(setD).catch((e) => setErr(e.message)), [id]);
   useEffect(() => {
+    lastStatus.current = null;
     load();
   }, [load, s.firm.firm_id]);
+  // Keep the page live: pick up hand-offs and notes from the rest of the chain.
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (document.visibilityState === 'visible' && !acting.current) api<Data>(`/sets/${id}`).then(setD).catch(() => {});
+    }, 15000);
+    return () => clearInterval(t);
+  }, [id, s.firm.firm_id]);
+  // When someone else hands the set to you while you're looking, show it arriving.
+  useEffect(() => {
+    if (!d) return;
+    const prev = lastStatus.current;
+    lastStatus.current = d.set.status;
+    if (!prev || prev === d.set.status || acting.current) return;
+    const mine = (TURN[d.set.status] || []).some((x) => d.my_slots.includes(x));
+    const by = d.events.find((e) => e.actor_id !== s.user.id && !['file_uploaded', 'file_removed', 'note_added', 'review_note'].includes(e.action));
+    if (mine && by) setFlight({ from: by.actor_name, to: 'you', toRole: '', verb: 'Just handed to', dir: 'in' });
+  }, [d?.set.status]);
   useEffect(() => {
     if (d)
       s.setCrumbs(
@@ -94,11 +116,14 @@ export default function SetPage() {
 
   async function act(action: string, extra: Record<string, string> = {}) {
     setBusy(true);
+    acting.current = true;
     try {
       await api(`/sets/${set.id}/action`, { body: { action, note, ...extra } });
       setNote('');
+      const f = flightFor(action, s.user.name, { name, p });
+      if (f) setFlight(f);
       await load();
-      toast(
+      if (!f) toast(
         ({
           submit: 'Sent to the PM.',
           pm_approve: 'Sent to the architect.',
@@ -117,6 +142,7 @@ export default function SetPage() {
       toast(e.message, true);
     } finally {
       setBusy(false);
+      acting.current = false;
     }
   }
 
@@ -139,6 +165,10 @@ export default function SetPage() {
     ['Client', set.delivered_at ? `Sent ${fmtDate(set.delivered_at)}` : 'Stamped set delivered', ['sealed']],
   ];
   const at = steps.findIndex((x) => x[2].includes(st));
+  const turnSlots = TURN[st] || [];
+  const myTurn = turnSlots.some((x) => slots.has(x)) || (st === 'sealed' && !set.delivered_at && slots.has('pm'));
+  const hold = holder(st, { name, p });
+  const arrived = d.events.find((e) => !['file_uploaded', 'file_removed', 'note_added', 'review_note', 'markup_uploaded', 'final_uploaded', 'sealed_uploaded', 'stamp_link_sent', 'client_link_sent', 'client_opened'].includes(e.action));
   const last = steps.length - 1;
   const lastNote = (actions: string[]) => d.events.find((e) => actions.includes(e.action) && e.note);
 
@@ -162,16 +192,28 @@ export default function SetPage() {
       <section className="card">
         <div className="chain">
           {steps.map(([t, who], n) => (
-            <div key={t} className={`step ${st === 'sealed' ? (n === last ? (set.delivered_at ? 'sealed' : 'now') : 'done') : n < at ? 'done' : n === at ? (st === 'pm_rework' ? 'back' : 'now') : ''}`}>
+            <div key={t} className={`step ${st === 'sealed' ? (n === last ? (set.delivered_at ? 'sealed' : 'now') : 'done') : n < at ? 'done' : n === at ? (st === 'pm_rework' ? 'back now' : 'now') : 'later'}${myTurn && (n === at || (st === 'sealed' && n === last && !set.delivered_at)) ? ' mine' : ''}`}>
               <div className="dot" />
               <div className="t">{t}</div>
               <div className="d">{n === 2 && st === 'pm_rework' ? 'Rework from review' : who}</div>
+              {myTurn && (n === at || (st === 'sealed' && n === last && !set.delivered_at)) && <span className="turn">Your turn</span>}
             </div>
           ))}
         </div>
+        {st !== 'sealed' && hold && (
+          <div className={`court${myTurn ? ' mine' : ''}`}>
+            {myTurn ? <span className="ball" /> : <Avatar name={hold.who} size={22} />}
+            <span>
+              {myTurn ? <b>The ball is in your court.</b> : <>With <b>{hold.who}</b> <span className="hint">· {hold.label}</span></>}
+              {arrived && <span className="hint"> {myTurn ? `${arrived.actor_name === s.user.name ? 'You moved it here' : `From ${arrived.actor_name}`}` : 'since'} {timeAgo(arrived.created_at)}.</span>}
+            </span>
+          </div>
+        )}
       </section>
 
-      <ActionBox d={d} slots={slots} note={note} setNote={setNote} busy={busy} act={act} upload={upload} lastNote={lastNote} name={name} reload={load} />
+      {flight && <HandoffFlight f={flight} onDone={() => setFlight(null)} />}
+
+      <ActionBox mine={myTurn} d={d} slots={slots} note={note} setNote={setNote} busy={busy} act={act} upload={upload} lastNote={lastNote} name={name} reload={load} />
 
       {(set.brief || intakeNote || st === 'intake' || byKind.reference.length > 0) && (
         <section className="card">
@@ -266,39 +308,18 @@ export default function SetPage() {
             </section>
           )}
         </div>
-        <section className="card">
-          <h2>History</h2>
-          {d.events.length === 0 ? (
-            <div className="hint">Nothing yet.</div>
-          ) : (
-            <div className="feed">
-              {d.events.map((e) => (
-                <div className="f" key={e.id}>
-                  <Avatar name={e.actor_name} />
-                  <div style={{ minWidth: 0 }}>
-                    <div>
-                      <b style={{ fontWeight: 500 }}>{e.actor_name}</b> {eventText(e.action)}{' '}
-                      {!NOTE_EVENTS.has(e.action) && e.note && <span className="mono">{e.note}</span>}
-                    </div>
-                    {NOTE_EVENTS.has(e.action) && e.note && <div className="note">“{e.note}”</div>}
-                    <time dateTime={e.created_at}>{timeAgo(e.created_at)}</time>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
+        <ReviewThread events={d.events} people={{ name, p }} me={s.user.id} slots={slots} setId={set.id} sealed={st === 'sealed'} reload={load} />
       </div>
     </main>
   );
 }
 
 function ActionBox(props: {
-  d: Data; slots: Set<string>; note: string; setNote: (s: string) => void; busy: boolean;
+  mine?: boolean; d: Data; slots: Set<string>; note: string; setNote: (s: string) => void; busy: boolean;
   act: (a: string, extra?: Record<string, string>) => void; upload: (f: FileList | File[], kind?: string) => void;
   lastNote: (a: string[]) => any; name: (id: string | null) => string | undefined; reload: () => void;
 }) {
-  const { d, slots, note, setNote, busy, act, upload, lastNote, name, reload } = props;
+  const { d, slots, note, setNote, busy, act, upload, lastNote, name, reload, mine } = props;
   const { set, project: p } = d;
   const st = set.status;
   const [license, setLicense] = useState('');
@@ -333,7 +354,7 @@ function ActionBox(props: {
 
   if (st === 'intake' && slots.has('pm'))
     return (
-      <section className="card actionbox col">
+      <section className={`card actionbox col${mine ? ' mine' : ''}`}>
         <div><b>Set the scope.</b> <span className="hint">Review the site notes and sketches below, then tell {name(p.drafter_id) || 'the drafter'} what to draw.</span></div>
         <textarea className="input" style={{ minHeight: 120 }} placeholder="What to draw, permit or construction set, standards to follow, due date." value={scope} onChange={(e) => setScope(e.target.value)} />
         <div className="row">
@@ -345,14 +366,14 @@ function ActionBox(props: {
 
   if (st === 'intake' && slots.has('architect'))
     return (
-      <section className="card actionbox">
+      <section className={`card actionbox${mine ? ' mine' : ''}`}>
         <b>Add your hand sketches, site photos and notes below.</b> <span className="hint">{name(p.pm_id) || 'The PM'} will set the scope and send it to the drafter.</span>
       </section>
     );
 
   if (st === 'final_record' && (slots.has('drafter') || slots.has('pm')))
     return (
-      <section className="card actionbox col">
+      <section className={`card actionbox col${mine ? ' mine' : ''}`}>
         <div><b>Approved. Turn in the final record.</b> <span className="hint">Upload the final PDF set and the CAD files below. They're kept with this revision and go to the engineer for stamp.</span></div>
         <div className="hint">{finals ? `${finals} final PDF` : 'No final PDF yet'} · {cads ? `${cads} CAD file${cads === 1 ? '' : 's'}` : 'no CAD files yet'}</div>
         <div className="row"><button className="btn primary" disabled={busy || !finals || !cads} onClick={() => act('submit_final')}><Icon name="check" /> Turn in final record</button></div>
@@ -361,7 +382,7 @@ function ActionBox(props: {
 
   if (st === 'draft' && slots.has('drafter'))
     return (
-      <section className="card actionbox col">
+      <section className={`card actionbox col${mine ? ' mine' : ''}`}>
         {quote(lastNote(['pm_returned']))}
         <div className="hint">{pdfs ? `${pdfs} PDF sheet${pdfs === 1 ? '' : 's'} uploaded.` : 'Upload at least one PDF sheet.'} When you're done, send it to {name(p.pm_id) || 'the PM'} for a check.</div>
         {noteBox('Note for the PM (optional)', 60)}
@@ -371,7 +392,7 @@ function ActionBox(props: {
 
   if (st === 'pm_review' && slots.has('pm'))
     return (
-      <section className="card actionbox col">
+      <section className={`card actionbox col${mine ? ' mine' : ''}`}>
         <div><b>Check the drafter's work.</b> <span className="hint">Send it on to {name(p.architect_id) || 'the architect'}, or back to {name(p.drafter_id) || 'the drafter'} with notes.</span></div>
         {quote(lastNote(['submitted']))}
         {noteBox('Notes (required to send back)')}
@@ -385,7 +406,7 @@ function ActionBox(props: {
 
   if (st === 'pm_rework' && slots.has('pm'))
     return (
-      <section className="card actionbox col" style={{ borderColor: 'color-mix(in srgb, var(--amber) 35%, var(--line))' }}>
+      <section className={`card actionbox col${mine ? ' mine' : ''}`} style={{ borderColor: 'color-mix(in srgb, var(--amber) 35%, var(--line))' }}>
         <div><b>Rework came back from review.</b> <span className="hint">Forward the notes and markups to the drafter, or fix it yourself and resubmit to the architect.</span></div>
         {quote(lastNote(['architect_returned', 'engineer_returned']))}
         {noteBox('Instructions for the drafter (required to send back)')}
@@ -398,7 +419,7 @@ function ActionBox(props: {
 
   if (st === 'architect_review' && slots.has('architect'))
     return (
-      <section className="card actionbox col">
+      <section className={`card actionbox col${mine ? ' mine' : ''}`}>
         <div><b>Your review.</b> <span className="hint">Download the sheets. Approve them for stamp, or add a marked-up PDF below and send the rework to {name(p.pm_id) || 'the PM'}.</span></div>
         {noteBox('Notes for the PM (required to send rework)')}
         <div className="row">

@@ -75,6 +75,19 @@ ok((await A(`/sets/${set.id}/action`, 'POST', { action: 'architect_return', note
 const dEvents = (await D(`/sets/${set.id}`)).events;
 ok(dEvents.find((e) => e.action === 'architect_returned')?.note === '', 'drafter does not see architect note directly');
 ok((await PM(`/sets/${set.id}/action`, 'POST', { action: 'pm_send_back', note: 'Fix beam per redline' })).status === 'draft', 'PM forwards rework to drafter');
+// Review thread notes: reviewers' notes stay with the PM; the PM's and drafter's notes reach everyone.
+ok((await A(`/sets/${set.id}/notes`, 'POST', { note: 'Check the ledger bolts too.' })).status === 201, 'architect leaves a reviewer note');
+ok((await PM(`/sets/${set.id}/notes`, 'POST', { note: 'Drafter: beam and ledger, see markups.' })).status === 201, 'PM leaves a note');
+ok((await D(`/sets/${set.id}/notes`, 'POST', { note: 'On it.' })).status === 201, 'drafter leaves a note');
+ok((await D(`/sets/${set.id}/notes`, 'POST', { note: '' })).status === 400, 'empty note is refused');
+ok((await D2(`/sets/${set.id}/notes`, 'POST', { note: 'hi' })).status === 404, 'unassigned drafter cannot post');
+{
+  const dv = (await D(`/sets/${set.id}`)).events;
+  ok(!dv.some((e) => e.action === 'review_note') && dv.filter((e) => e.action === 'note_added').length === 2, 'drafter sees PM and own notes, not the reviewer note');
+  const pv = (await PM(`/sets/${set.id}`)).events;
+  ok(pv.some((e) => e.action === 'review_note' && e.note.includes('ledger')), 'PM sees the reviewer note');
+  ok(!(await D(`/projects/${p.id}`)).events.some((e) => e.action === 'review_note'), 'drafter project feed hides the reviewer note');
+}
 ok((await D(`/sets/${set.id}`)).files.some((f) => f.kind === 'markup'), 'drafter now sees the markup');
 ok((await D(`/sets/${set.id}/action`, 'POST', { action: 'submit' })).status === 'pm_review', 'drafter resubmits after rework');
 ok((await PM(`/sets/${set.id}/action`, 'POST', { action: 'pm_approve' })).status === 'architect_review', 'PM approves again');
