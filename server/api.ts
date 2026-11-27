@@ -2,6 +2,7 @@ import { authenticate, type AuthUser } from './auth.ts';
 import { many, one } from './db.ts';
 import { files } from './storage.ts';
 import { parseLetter } from './letter.ts';
+import { resubmittalPdf } from './resubmittal.ts';
 
 type Role = 'pm' | 'drafter' | 'architect' | 'engineer';
 const ROLES: Role[] = ['pm', 'drafter', 'architect', 'engineer'];
@@ -376,7 +377,9 @@ async function createProject(ctx: Ctx) {
 async function getProject(ctx: Ctx) {
   const m = firmOf(ctx);
   const p = await loadProject(m, ctx.params[0], ctx.user.id);
-  const [sets, comments, events, members] = await Promise.all([
+  await seedMilestones(m, p, ctx.user.id);
+  const slotSet0 = slotsOf(p, m, ctx.user.id);
+  const [sets, comments, events, members, milestones, shareLinks] = await Promise.all([
     many(
       `select s.*,
          (select count(*)::int from files f where f.revision_set_id = s.id and f.kind = 'pdf' and f.status = 'ready') as pdf_count,
@@ -392,8 +395,18 @@ async function getProject(ctx: Ctx) {
     ),
     many(`select * from events where project_id = $1 and firm_id = $2 order by created_at desc limit 40`, [p.id, m.firm_id]),
     many(`select user_id, name, email, role, is_admin from memberships where firm_id = $1 order by name`, [m.firm_id]),
+    listMilestones(p.id),
+    !slotSet0.has('pm')
+      ? Promise.resolve([])
+      : many(
+          `select l.id, l.revision_set_id, s.rev_number, l.recipient_name, l.recipient_email, l.show_timeline, l.created_at, l.expires_at,
+             l.opened_at, l.last_opened_at, l.open_count, l.revoked_at
+           from share_links l left join revision_sets s on s.id = l.revision_set_id
+           where l.project_id = $1 order by l.created_at desc limit 20`,
+          [p.id],
+        ),
   ]);
-  const slotSet = slotsOf(p, m, ctx.user.id);
+  const slotSet = slotSet0;
   const slots = [...slotSet];
   const vis = visiblePeople(m, slotSet, ctx.user.id);
   return json({
@@ -405,6 +418,8 @@ async function getProject(ctx: Ctx) {
     events: redactPeople(redactEvents(events, slots), p, slotSet, vis, 'actor_name', 'actor_id'),
     members: vis ? members.filter((x) => vis.has(x.user_id)) : members,
     my_slots: slots,
+    milestones,
+    share_links: shareLinks,
   });
 }
 
@@ -989,6 +1004,7 @@ async function deleteProject(ctx: Ctx) {
   // Any outstanding stamp links stop working with the project.
   await many(`update stamp_requests set revoked_at = now() where project_id = $1 and used_at is null and revoked_at is null`, [p.id]);
   await many(`update client_links set revoked_at = now() where project_id = $1 and revoked_at is null`, [p.id]);
+  await many(`update share_links set revoked_at = now() where project_id = $1 and revoked_at is null`, [p.id]);
   await log(m, ctx.user, p.id, null, 'project_deleted', p.name);
   return json({ ok: true, purge_after_days: TRASH_DAYS });
 }
@@ -1151,6 +1167,239 @@ async function deleteComment(ctx: Ctx) {
   return json({ ok: true });
 }
 
+
+// ---------- permit timeline ----------
+
+/** The standard permit path. Every project starts with these; the PM can add more steps between them. */
+const MILESTONES: [string, string][] = [
+  ['submitted', 'Submitted to the city'],
+  ['under_review', 'Under review'],
+  ['comments_received', 'Comments received'],
+  ['resubmitted', 'Resubmitted'],
+  ['approved', 'Approved'],
+];
+
+async function seedMilestones(m: Member, p: any, userId: string) {
+  await many(
+    `insert into permit_milestones (firm_id, project_id, kind, label, position, created_by)
+     select $1, $2, x.kind, x.label, x.position, $3
+     from jsonb_to_recordset($4::jsonb) as x(kind text, label text, position int)
+     where not exists (select 1 from permit_milestones where project_id = $2)`,
+    [m.firm_id, p.id, userId, JSON.stringify(MILESTONES.map(([kind, label], i) => ({ kind, label, position: i })))],
+  );
+}
+
+function listMilestones(projectId: string) {
+  return many(
+    `select id, kind, label, position, to_char(target_on, 'YYYY-MM-DD') as target_on, to_char(done_on, 'YYYY-MM-DD') as done_on, note
+     from permit_milestones where project_id = $1 order by position, created_at`,
+    [projectId],
+  );
+}
+
+/** A date field: "" or null clears it, YYYY-MM-DD sets it, undefined keeps what is there. */
+function dateField(v: unknown, cur: string | null): string | null {
+  if (v === undefined) return cur;
+  if (v === null || v === '') return null;
+  const s = str(v, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(Date.parse(s))) throw bad('Dates look like 2026-12-01.');
+  return s;
+}
+
+async function milestoneFor(ctx: Ctx) {
+  const m = firmOf(ctx);
+  const row = await one(
+    `select id, project_id, label, note, to_char(target_on, 'YYYY-MM-DD') as target_on, to_char(done_on, 'YYYY-MM-DD') as done_on
+     from permit_milestones where id = $1 and firm_id = $2`,
+    [ctx.params[0], m.firm_id],
+  );
+  if (!row) throw notFound('Milestone not found');
+  const p = await loadProject(m, row.project_id, ctx.user.id);
+  if (!slotsOf(p, m, ctx.user.id).has('pm')) throw forbidden('The project manager keeps the permit timeline.');
+  return { m, p, row };
+}
+
+async function addMilestone(ctx: Ctx) {
+  const m = firmOf(ctx);
+  const p = await loadProject(m, ctx.params[0], ctx.user.id);
+  if (!slotsOf(p, m, ctx.user.id).has('pm')) throw forbidden('The project manager keeps the permit timeline.');
+  await seedMilestones(m, p, ctx.user.id);
+  const label = str(ctx.body.label, 120);
+  if (!label) throw bad('Name the step.');
+  // New steps go before "Approved" unless the PM says where.
+  const all = await listMilestones(p.id);
+  const approved = all.find((x) => x.kind === 'approved');
+  const after = all.find((x) => x.id === ctx.body.after_id);
+  const at = after ? after.position + 1 : approved ? approved.position : all.length;
+  await many(`update permit_milestones set position = position + 1 where project_id = $1 and position >= $2`, [p.id, at]);
+  const kind = MILESTONES.some(([k]) => k === ctx.body.kind) ? ctx.body.kind : 'other';
+  const row = await one(
+    `insert into permit_milestones (firm_id, project_id, kind, label, position, target_on, created_by)
+     values ($1,$2,$3,$4,$5,$6,$7) returning id`,
+    [m.firm_id, p.id, kind, label, at, dateField(ctx.body.target_on, null), ctx.user.id],
+  );
+  return json({ id: row!.id, milestones: await listMilestones(p.id) }, 201);
+}
+
+async function updateMilestone(ctx: Ctx) {
+  const { m, p, row } = await milestoneFor(ctx);
+  const b = ctx.body;
+  // done: true marks it complete today (or on done_on); done: false reopens it.
+  let doneOn = dateField(b.done_on, row.done_on);
+  if (b.done === true && !doneOn) doneOn = new Date().toISOString().slice(0, 10);
+  if (b.done === false) doneOn = null;
+  const label = b.label !== undefined ? str(b.label, 120) || row.label : row.label;
+  await many(
+    `update permit_milestones set label = $2, target_on = $3, done_on = $4, note = $5 where id = $1`,
+    [row.id, label, dateField(b.target_on, row.target_on), doneOn, b.note !== undefined ? str(b.note, 1000) : row.note],
+  );
+  if (!row.done_on && doneOn) await log(m, ctx.user, p.id, null, 'milestone_done', label);
+  if (row.done_on && !doneOn) await log(m, ctx.user, p.id, null, 'milestone_reopened', label);
+  return json({ milestones: await listMilestones(p.id) });
+}
+
+async function deleteMilestone(ctx: Ctx) {
+  const { p, row } = await milestoneFor(ctx);
+  await many(`delete from permit_milestones where id = $1`, [row.id]);
+  return json({ milestones: await listMilestones(p.id) });
+}
+
+// ---------- share links (read-only, no account needed) ----------
+
+const SHARE_DAYS = [7, 30, 90];
+
+async function createShareLink(ctx: Ctx) {
+  const m = firmOf(ctx);
+  const p = await loadProject(m, ctx.params[0], ctx.user.id);
+  if (!slotsOf(p, m, ctx.user.id).has('pm')) throw forbidden('The project manager shares the project with the client.');
+  let setId: string | null = null;
+  if (ctx.body.revision_set_id) {
+    setId = await setOrNull(m, p.id, ctx.body.revision_set_id);
+    const s = await one(`select status from revision_sets where id = $1`, [setId]);
+    if (s?.status !== 'sealed') throw bad('Only stamped and sealed sets can be shared.');
+  }
+  const email = str(ctx.body.email, 200).toLowerCase();
+  if (email && !EMAIL.test(email)) throw bad('Enter a valid email, or leave it blank.');
+  const days = SHARE_DAYS.includes(Number(ctx.body.days)) ? Number(ctx.body.days) : 30;
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  const token = btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const r = await one(
+    `insert into share_links (firm_id, project_id, revision_set_id, token_hash, recipient_name, recipient_email, show_timeline, created_by, expires_at)
+     values ($1,$2,$3,$4,$5,$6,$7,$8, now() + make_interval(days => $9)) returning id, expires_at`,
+    [m.firm_id, p.id, setId, await sha256Hex(token), str(ctx.body.name, 120), email, ctx.body.show_timeline !== false, ctx.user.id, days],
+  );
+  await log(m, ctx.user, p.id, setId, 'share_link_created', setId ? 'one stamped set' : 'the project');
+  const origin = new URL(ctx.req.url).origin;
+  return json({ id: r!.id, url: `${origin}/share/${token}`, expires_at: r!.expires_at }, 201);
+}
+
+async function revokeShareLink(ctx: Ctx) {
+  const m = firmOf(ctx);
+  const r = await one(`select project_id from share_links where id = $1 and firm_id = $2`, [ctx.params[0], m.firm_id]);
+  if (!r) throw notFound('Link not found');
+  const p = await loadProject(m, r.project_id, ctx.user.id);
+  if (!slotsOf(p, m, ctx.user.id).has('pm')) throw forbidden();
+  await many(`update share_links set revoked_at = coalesce(revoked_at, now()) where id = $1`, [ctx.params[0]]);
+  return json({ ok: true });
+}
+
+async function publicShare(path: string, method: string, url: URL): Promise<Response> {
+  const mm = path.match(/^\/public\/share\/([\w-]{20,64})(?:\/files\/([0-9a-f-]{36}))?$/);
+  if (!mm || method !== 'GET') return json({ error: 'Not found' }, 404);
+  const r = await one(
+    `select l.*, p.name as project_name, p.number as project_number, p.address, p.jurisdiction, p.permit_number,
+       f.name as firm_name
+     from share_links l join projects p on p.id = l.project_id join firms f on f.id = l.firm_id
+     where l.token_hash = $1 and p.deleted_at is null`,
+    [await sha256Hex(mm[1])],
+  );
+  if (!r || r.revoked_at) throw notFound('This link is no longer active. Ask the firm for a new one.');
+  if (new Date(r.expires_at).getTime() < Date.now()) throw notFound('This link has expired. Ask the firm for a new one.');
+  // Only stamped sets are ever shared: the whole project shows every sealed set, a set link shows just that one.
+  const sets = await many(
+    `select id, rev_number, title, reason, sealed_at, engineer_license from revision_sets
+     where project_id = $1 and status = 'sealed' and ($2::uuid is null or id = $2) order by rev_number desc`,
+    [r.project_id, r.revision_set_id],
+  );
+  const ids = sets.map((s) => s.id);
+  if (mm[2]) {
+    const f = await one(`select * from files where id = $1 and kind = 'sealed_pdf' and status = 'ready' and revision_set_id = any($2::uuid[])`, [mm[2], ids]);
+    if (!f) throw notFound('File not found');
+    return json({ url: await files().downloadUrl(f.storage_key, f.filename, url.searchParams.get('inline') === '1') });
+  }
+  await many(`update share_links set opened_at = coalesce(opened_at, now()), last_opened_at = now(), open_count = open_count + 1 where id = $1`, [r.id]);
+  if (!r.opened_at) {
+    await log({ firm_id: r.firm_id }, { id: `client:${r.id}`, name: r.recipient_name || r.recipient_email || 'The client' }, r.project_id, r.revision_set_id, 'share_opened', '');
+  }
+  const fileRows = ids.length
+    ? await many(
+        `select id, revision_set_id, filename, size_bytes, sha256 from files
+         where revision_set_id = any($1::uuid[]) and kind = 'sealed_pdf' and status = 'ready' order by filename`,
+        [ids],
+      )
+    : [];
+  return json({
+    firm_name: r.firm_name,
+    recipient_name: r.recipient_name,
+    scope: r.revision_set_id ? 'set' : 'project',
+    project: { name: r.project_name, number: r.project_number, address: r.address, jurisdiction: r.jurisdiction, permit_number: r.permit_number },
+    // Clients see stage names and dates, not the PM's notes or anyone's name.
+    timeline: r.show_timeline ? (await listMilestones(r.project_id)).map(({ kind, label, target_on, done_on }) => ({ kind, label, target_on, done_on })) : null,
+    sets: sets.map((s) => ({ ...s, files: fileRows.filter((f) => f.revision_set_id === s.id).map(({ revision_set_id, ...f }) => (void revision_set_id, f)) })),
+    expires_at: r.expires_at,
+  });
+}
+
+// ---------- resubmittal letter ----------
+
+/** The comments a revision answers: the ones its city round was started for, plus any marked fixed in it. */
+function roundComments(setId: string) {
+  return many(
+    `select * from city_comments where round_set_id = $1 or addressed_in_set_id = $1
+     order by nullif(regexp_replace(number, '\\D', '', 'g'), '')::int nulls last, number, created_at`,
+    [setId],
+  );
+}
+
+async function resubmittalLetter(ctx: Ctx) {
+  const m = firmOf(ctx);
+  const { s, p } = await loadSet(m, ctx.params[0], ctx.user.id);
+  if (!slotsOf(p, m, ctx.user.id).has('pm')) throw forbidden('The project manager sends the resubmittal letter.');
+  const comments = await roundComments(s.id);
+  if (!comments.length) throw bad(`No city comments are tied to Rev ${s.rev_number}. Start a revision for city comments, or mark comments fixed in this revision.`);
+  const b = ctx.body;
+  const lang = 'en-US';
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(str(b.date, 10)) ? new Date(str(b.date, 10) + 'T12:00:00Z') : new Date();
+  const revs = new Map((await many(`select id, rev_number from revision_sets where project_id = $1`, [p.id])).map((x) => [x.id, x.rev_number]));
+  const pdf = await resubmittalPdf({
+    firmName: m.firm_name,
+    date: day.toLocaleDateString(lang, { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' }),
+    to: str(b.to, 600) || [p.jurisdiction ? `${p.jurisdiction} Building Department` : 'Building Department', 'Plan Review'].join('\n'),
+    project: { name: p.name, number: p.number, address: p.address, jurisdiction: p.jurisdiction, permit_number: p.permit_number },
+    revNumber: s.rev_number,
+    revTitle: s.title,
+    intro: b.intro !== undefined ? str(b.intro, 4000) : defaultIntro(p, s),
+    closing: b.closing !== undefined ? str(b.closing, 4000) : 'Please contact us with any questions about these revisions.',
+    signer: str(b.signer, 120) || ctx.user.name,
+    signerTitle: b.signer_title !== undefined ? str(b.signer_title, 120) : 'Project Manager',
+    comments: comments.map((c) => ({
+      number: c.number, sheet: c.sheet, discipline: c.discipline, body: c.body, response: c.response,
+      fixedIn: c.addressed_in_set_id && revs.has(c.addressed_in_set_id) ? `Rev ${revs.get(c.addressed_in_set_id)}` : '',
+    })),
+  });
+  await log(m, ctx.user, p.id, s.id, 'resubmittal_letter', `Rev ${s.rev_number}, ${comments.length} comments`);
+  const file = `Resubmittal-${p.name.replace(/[^\w-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')}-Rev${s.rev_number}.pdf`;
+  return new Response(pdf, {
+    status: 200,
+    headers: { 'content-type': 'application/pdf', 'content-disposition': `attachment; filename="${file}"`, 'cache-control': 'no-store' },
+  });
+}
+
+function defaultIntro(p: any, s: any) {
+  const permit = p.permit_number ? ` (permit ${p.permit_number})` : '';
+  return `Enclosed is Rev ${s.rev_number} of the drawings for ${p.name}${permit}, revised in response to the plan review comments. Each comment is listed below with our response and the sheet where the change was made.`;
+}
+
 // ---------- router ----------
 
 type Handler = (ctx: Ctx) => Promise<Response>;
@@ -1189,6 +1438,12 @@ const routes: [string, RegExp, Handler][] = [
   ['GET', new RegExp(`^/files/${ID}/download$`), downloadFile],
   ['DELETE', new RegExp(`^/files/${ID}$`), deleteFile],
   ['PATCH', new RegExp(`^/comments/${ID}$`), updateComment],
+  ['POST', new RegExp(`^/projects/${ID}/milestones$`), addMilestone],
+  ['PATCH', new RegExp(`^/milestones/${ID}$`), updateMilestone],
+  ['DELETE', new RegExp(`^/milestones/${ID}$`), deleteMilestone],
+  ['POST', new RegExp(`^/projects/${ID}/share-links$`), createShareLink],
+  ['DELETE', new RegExp(`^/share-links/${ID}$`), revokeShareLink],
+  ['POST', new RegExp(`^/sets/${ID}/resubmittal-letter$`), resubmittalLetter],
   ['DELETE', new RegExp(`^/comments/${ID}$`), deleteComment],
 ];
 
@@ -1211,6 +1466,7 @@ export async function handle(req: Request): Promise<Response> {
     // Engineer stamp links work without an account; the token in the URL is the credential.
     if (path.startsWith('/public/stamp/')) return await publicStamp(req, path, req.method, await readBody(req));
     if (path.startsWith('/public/delivery/')) return await publicDelivery(path, req.method);
+    if (path.startsWith('/public/share/')) return await publicShare(path, req.method, url);
 
     let matched: { h: Handler; params: string[] } | null = null;
     let pathMatched = false;

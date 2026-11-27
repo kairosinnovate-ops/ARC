@@ -236,3 +236,44 @@ update projects set set_types = case purpose
     when 'permit_construction' then '{permit,construction}'::text[]
     else '{permit}'::text[] end
   where set_types = '{permit}' and purpose in ('construction','permit_construction')
+;
+
+-- ---------------------------------------------------------------------------
+-- v7 (2026-11-27): permit timeline, share links, resubmittal letters.
+-- ---------------------------------------------------------------------------
+-- Permit milestones per project. The five standard stages are added the first time the project is opened;
+-- the PM sets target and completed dates and can add more (a second comment round, an inspection…).
+create table if not exists permit_milestones (
+  id uuid primary key default gen_random_uuid(),
+  firm_id uuid not null references firms(id) on delete cascade,
+  project_id uuid not null references projects(id) on delete cascade,
+  kind text not null default 'other' check (kind in ('submitted','under_review','comments_received','resubmitted','approved','other')),
+  label text not null,
+  position int not null default 0,
+  target_on date,
+  done_on date,
+  note text not null default '',
+  created_by text not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists permit_milestones_project_idx on permit_milestones(project_id, position);
+
+-- Read-only links for the owner or client: a whole project (timeline + every stamped set) or one stamped set.
+create table if not exists share_links (
+  id uuid primary key default gen_random_uuid(),
+  firm_id uuid not null references firms(id) on delete cascade,
+  project_id uuid not null references projects(id) on delete cascade,
+  revision_set_id uuid references revision_sets(id) on delete cascade,
+  token_hash text not null unique,
+  recipient_name text not null default '',
+  recipient_email text not null default '',
+  show_timeline boolean not null default true,
+  created_by text not null,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  opened_at timestamptz,
+  last_opened_at timestamptz,
+  open_count int not null default 0,
+  revoked_at timestamptz
+);
+create index if not exists share_links_project_idx on share_links(project_id)

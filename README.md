@@ -24,7 +24,10 @@ Permit workspace for architecture and engineering firms: revision sets that pair
 - **Client delivery:** the PM sends a 30-day download link (`/d/<token>`) for the sealed PDF in a Gmail draft. Clients need no account. Only a SHA-256 of the token is stored; the first open is logged.
 - **City comments:** once comments are logged, the PM starts the next revision "for city comments", which ties the open comments to that round and runs it through the same loop.
 - **Who sees who:** only PMs and admins see names. Drafters, architects and engineers see only the projects they're on and only their own name: everyone else shows up by role ("Project manager", "Architect"), and each stage shows the role it waits on, not the person. Clients and email-link engineers see no team names either. The architect keeps the outside engineer's email so they can send the stamp link.
-- **Deleting projects:** the project's PM (or a firm admin) deletes it by typing its name. It moves to Trash (`projects.deleted_at`), is hidden from everyone, and its open stamp links are revoked. It can be restored for 30 days, or deleted forever (typed name again), which removes its stored files. The scheduled function `purge-trash` runs daily and purges anything in Trash for more than 30 days.
+- **Permit timeline:** every project shows the permit's path through the city: submitted, under review, comments received, resubmitted, approved (`permit_milestones`). The PM sets target and completed dates, marks steps done, and adds steps (a second comment round, a hearing). Late targets show in amber. Everyone on the project sees it; notes stay with the team.
+- **Share links:** the PM shares a read-only page (`/share/<token>`, 7, 30 or 90 days) for the whole project (timeline plus every stamped set) or one stamped set. The client previews or downloads the sealed PDFs without an account and sees no team names, notes or working files. The PM sees how often each link was opened and can turn it off. Only a SHA-256 of the token is stored.
+- **Resubmittal letter:** after a city comment round, the PM writes a response to each comment and downloads a PDF letter (`server/resubmittal.ts`, pdf-lib) with the firm, date, jurisdiction, project, address, permit, revision and a comment / response table. Responses are saved back to the comment log.
+- **Deleting projects:** the project's PM (or a firm admin) deletes it by typing its name. It moves to Trash (`projects.deleted_at`), is hidden from everyone, and its open stamp, client and share links are revoked. It can be restored for 30 days, or deleted forever (typed name again), which removes its stored files. The scheduled function `purge-trash` runs daily and purges anything in Trash for more than 30 days.
 - Every query is scoped to the caller's firm (`x-arc-firm` header picks the active firm). Sealed sets are locked.
 
 ## Run locally
@@ -50,4 +53,4 @@ Schema changes: edit `db/schema.sql` (keep it idempotent) and run `npm run db:mi
 
 ## Not in v1
 
-AI assistant, permit timeline, share links, resubmittal letter, revision diff, emailed invites and notifications.
+AI assistant, revision diff, emailed invites and notifications.
