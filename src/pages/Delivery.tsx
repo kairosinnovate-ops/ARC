@@ -56,7 +56,7 @@ export default function DeliveryPage() {
             <Icon name="seal" size={22} />
             <div>
               <b>Stamped and sealed{d.sealed_at ? ` ${fmtDate(d.sealed_at)}` : ''}.</b>{' '}
-              <span className="hint">{d.sealed_by_name ? `Engineer: ${d.sealed_by_name}` : ''}{d.engineer_license ? ` · License ${d.engineer_license}` : ''}</span>
+              <span className="hint">{d.engineer_license ? `Stamped by a licensed engineer · License ${d.engineer_license}` : 'Stamped by a licensed engineer'}</span>
             </div>
           </div>
           <div className="col" style={{ gap: 8 }}>

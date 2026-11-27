@@ -10,6 +10,8 @@ export default function ProjectsPage() {
   const [projects, setProjects] = useState<any[] | null>(null);
   const [err, setErr] = useState('');
   const [params, setParams] = useSearchParams();
+  // Only PMs and admins see people's names; everyone else sees the stage and the role it waits on.
+  const seesNames = s.firm.is_admin || s.firm.role === 'pm';
   const canCreate = s.firm.is_admin || ['pm', 'architect'].includes(s.firm.role);
   const creating = params.get('new') === '1' && canCreate;
   const typeFilter = params.get('type') || '';
@@ -130,7 +132,7 @@ export default function ProjectsPage() {
               <h3>{p.name}</h3>
               <div className="meta">{p.kind === 'modification' ? 'Modification' : 'Initial drawings'}{p.address ? ` · ${p.address}` : ''}</div>
               {p.set_types?.length > 0 && <div className="tagrow">{setTypeList(p.set_types).map((t) => <span key={t} className="tag">{t}</span>)}</div>}
-              <div className="meta">PM: {p.pm_name || 'none'} · Drafter: {p.drafter_name || 'not assigned'}</div>
+              {seesNames && <div className="meta">PM: {p.pm_name || 'none'} · Drafter: {p.drafter_name || 'not assigned'}</div>}
               <div className="row hint" style={{ justifyContent: 'space-between' }}>
                 <span style={{ color: p.open_comments ? 'var(--redline)' : undefined }}>
                   {p.open_comments} open city comment{p.open_comments === 1 ? '' : 's'}

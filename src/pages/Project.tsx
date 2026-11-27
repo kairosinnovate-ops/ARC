@@ -79,16 +79,15 @@ export default function ProjectPage() {
                 ['PM', p.pm_id, 'Not set'],
                 ['Drafter', p.drafter_id, 'Not assigned'],
                 ['Architect', p.architect_id, 'Not assigned'],
-                ['Engineer', p.engineer_id, p.engineer_email ? `${p.engineer_name || p.engineer_email} (by email)` : 'Not assigned'],
+                ['Engineer', p.engineer_id, p.engineer_email ? (isPM ? `${p.engineer_name || p.engineer_email} (by email)` : 'By email link') : 'Not assigned'],
               ] as [string, string | null, string][])
-                // Only the PM sees the whole team. Others see the PM and the people they hand work to.
-                .filter(([label, id]) => isPM || id || (label === 'Engineer' && p.engineer_email))
                 .map(([label, id, none]) => (
                 <div className="slot" key={label}>
-                  <Avatar name={name(id) || (label === 'Engineer' ? p.engineer_name || p.engineer_email : '') || '?'} />
+                  {/* Only the PM and admins see names. Everyone else sees the role and whether it is filled. */}
+                  <Avatar name={name(id) || (isPM && label === 'Engineer' ? p.engineer_name || p.engineer_email : '') || label} />
                   <div className="who">
                     <div className="label">{label}{id === s.user.id && <span className="you">You</span>}</div>
-                    <div>{name(id) || none}</div>
+                    <div>{name(id) || (id ? 'Assigned' : none)}</div>
                   </div>
                 </div>
               ))}
@@ -96,7 +95,7 @@ export default function ProjectPage() {
             {isPM && (p.client_name || p.client_email) && (
               <div className="hint" style={{ marginTop: 12 }}>Client: {p.client_name || p.client_email}{p.client_name && p.client_email ? ` · ${p.client_email}` : ''}</div>
             )}
-            {!isPM && <div className="hint" style={{ marginTop: 12 }}>Questions about this project go to {name(p.pm_id) || 'the project manager'}.</div>}
+            {!isPM && <div className="hint" style={{ marginTop: 12 }}>Questions about this project go to {name(p.pm_id) || 'the project manager'}. Only the PM sees who's on the team.</div>}
             {p.requirements && (
               <>
                 <div className="label" style={{ margin: '16px 0 8px' }}>Scope and requirements</div>
@@ -370,7 +369,7 @@ function CommentLog({ data, reload, canStartRound, onStartRound }: { data: Data;
                   {c.discipline && <span>{c.discipline}</span>}
                   {c.revision_set_id && revOf[c.revision_set_id] !== undefined && <span>on Rev {revOf[c.revision_set_id]}</span>}
                   {c.round_set_id && revOf[c.round_set_id] !== undefined && c.status !== 'addressed' && <span>Being fixed in Rev {revOf[c.round_set_id]}</span>}
-                  <span>{c.owner_id ? `Owner: ${people[c.owner_id] || 'Someone on the team'}` : 'No owner'}</span>
+                  <span>{c.owner_id ? `Owner: ${people[c.owner_id] || c.owner_label || 'Someone on the team'}` : 'No owner'}</span>
                   {c.status !== 'addressed' ? (
                     <span className={`wait${c.days_waiting >= 7 ? ' late' : ''}`}>{c.days_waiting} day{c.days_waiting === 1 ? '' : 's'} waiting</span>
                   ) : (
@@ -451,6 +450,7 @@ function CommentForm({ data, comment, onClose, onSaved }: { data: Data; comment?
             <span>Owner</span>
             <select className="input" value={f.owner_id} onChange={set('owner_id')}>
               <option value="">No owner</option>
+              {comment?.owner_id === 'assigned' && <option value="assigned">{comment.owner_label || 'Someone on the team'}</option>}
               {data.members.map((m) => <option key={m.user_id} value={m.user_id}>{m.name}</option>)}
             </select>
           </label>

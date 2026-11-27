@@ -161,7 +161,7 @@ export default function SetPage() {
     ['PM check', name(p.pm_id) || 'PM', ['pm_review', 'pm_rework']],
     ['Architect review', name(p.architect_id) || 'Architect', ['architect_review']],
     ['Final record', 'Final PDF and CAD', ['final_record']],
-    ['Engineer stamp', name(p.engineer_id) || p.engineer_name || p.engineer_email || 'Engineer', ['engineer_review']],
+    ['Engineer stamp', name(p.engineer_id) || p.engineer_name || 'Engineer', ['engineer_review']],
     ['Client', set.delivered_at ? `Sent ${fmtDate(set.delivered_at)}` : 'Stamped set delivered', ['sealed']],
   ];
   const at = steps.findIndex((x) => x[2].includes(st));

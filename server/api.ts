@@ -45,17 +45,13 @@ const limitedToAssigned = (m: Member) => !m.is_admin && m.role !== 'pm';
 const onProject = (p: any, userId: string) => [p.pm_id, p.drafter_id, p.architect_id, p.engineer_id].includes(userId);
 
 /**
- * Only the PM (and admins) see who's who on a project. Everyone else sees the PM and the person who hands them work:
- * the architect also sees the engineer they send the set to, and the engineer sees the architect.
+ * Only the PM and firm admins see people's names. Drafters, architects, engineers and clients see the stage and
+ * the role behind it ("Architect review", "With the engineer") and only their own name.
  * Returns null when the viewer may see everyone.
  */
-function visiblePeople(p: any, slots: Set<Slot>, userId: string): Set<string> | null {
-  if (slots.has('pm')) return null;
-  const v = new Set<string>([userId]);
-  if (p.pm_id) v.add(p.pm_id);
-  if (slots.has('architect') && p.engineer_id) v.add(p.engineer_id);
-  if (slots.has('engineer') && p.architect_id) v.add(p.architect_id);
-  return v;
+function visiblePeople(m: Member, slots: Set<Slot>, userId: string): Set<string> | null {
+  if (slots.has('pm') || m.is_admin || m.role === 'pm') return null;
+  return new Set<string>([userId]);
 }
 function roleOf(p: any, id: string) {
   if (id === p.pm_id) return 'Project manager';
@@ -65,23 +61,34 @@ function roleOf(p: any, id: string) {
   if (id.startsWith('client:')) return 'Client';
   return 'Team member';
 }
-const canSee = (vis: Set<string> | null, slots: Set<Slot>, id: string) =>
-  !vis || vis.has(id) || (id.startsWith('stamp:') && slots.has('architect'));
+const canSee = (vis: Set<string> | null, id: string) => !vis || vis.has(id);
+/** Stands in for someone else's id, so the page knows the slot is filled without learning who fills it. */
+const HIDDEN = 'assigned';
 
 function redactProject(p: any, slots: Set<Slot>, vis: Set<string> | null) {
   if (!vis) return p;
-  const q = { ...p, client_name: '', client_email: '' };
-  for (const k of ['drafter_id', 'architect_id', 'engineer_id']) if (q[k] && !vis.has(q[k])) q[k] = null;
-  if (!slots.has('architect') && !slots.has('engineer')) q.engineer_name = q.engineer_email = '';
+  const q = { ...p, client_name: '', client_email: '', engineer_name: '', created_by: null, deleted_by: null };
+  for (const k of ['pm_id', 'drafter_id', 'architect_id', 'engineer_id']) if (q[k] && !vis.has(q[k])) q[k] = HIDDEN;
+  // The architect can send the stamp link, so they keep the address it goes to. Nobody else needs it.
+  if (!slots.has('architect')) q.engineer_email = '';
   return q;
 }
+/** A revision set's seal, as a non-PM sees it: the engineer's name only if it is their own. */
+function redactSet(s: any, vis: Set<string> | null) {
+  if (!vis || !s) return s;
+  return { ...s, sealed_by_name: s.sealed_by && vis.has(s.sealed_by) ? s.sealed_by_name : '', created_by: null };
+}
+/** Event notes that carry someone's name or email. */
 const PRIVATE_NOTES = ['stamp_link_sent', 'client_link_sent'];
 function redactPeople<T extends { actor_id?: string; uploaded_by?: string }>(rows: T[], p: any, slots: Set<Slot>, vis: Set<string> | null, nameKey: 'actor_name' | 'uploaded_by_name', idKey: 'actor_id' | 'uploaded_by'): T[] {
+  void slots;
   if (!vis) return rows;
   return rows.map((r: any) => {
     const id = String(r[idKey] || '');
-    const out = canSee(vis, slots, id) ? r : { ...r, [nameKey]: roleOf(p, id) };
-    return PRIVATE_NOTES.includes(out.action) && !slots.has('architect') ? { ...out, note: '' } : out;
+    const out = canSee(vis, id) ? r : { ...r, [nameKey]: roleOf(p, id), [idKey]: HIDDEN };
+    if (PRIVATE_NOTES.includes(out.action)) return { ...out, note: out.action === 'client_link_sent' ? 'the client' : 'the engineer' };
+    if (out.action === 'sealed' && /^Stamped by /.test(out.note || '')) return { ...out, note: 'Stamp received by email' };
+    return out;
   });
 }
 
@@ -169,8 +176,8 @@ async function team(ctx: Ctx) {
     [m.firm_id],
   );
   if (limitedToAssigned(m)) {
-    // Only PMs and admins see who's who. Others see themselves and the firm's PMs.
-    return json({ members: members.filter((x) => x.user_id === ctx.user.id || x.role === 'pm' || x.is_admin).map((x) => ({ ...x, email: x.user_id === ctx.user.id ? x.email : '' })), invites: [], limited: true });
+    // Only PMs and admins see who's who. Everyone else sees only themselves.
+    return json({ members: members.filter((x) => x.user_id === ctx.user.id), invites: [], limited: true });
   }
   const invites = await many(
     `select id, email, role, is_admin, created_at from invites where firm_id = $1 and accepted_at is null order by created_at`,
@@ -268,7 +275,12 @@ async function listProjects(ctx: Ctx) {
     return { ...r, ...st, your_turn: yourTurn };
   });
   if (!limitedToAssigned(m)) return json(out);
-  return json(out.map((r) => ({ ...r, drafter_name: r.drafter_id === ctx.user.id ? r.drafter_name : null })));
+  // Names stay with the PM and admins. Everyone else gets the stage and the role it waits on.
+  return json(out.map((r) => {
+    const vis = new Set([ctx.user.id]);
+    const q = redactProject(r, slotsOf(r, m, ctx.user.id), vis);
+    return { ...q, pm_name: r.pm_id === ctx.user.id ? r.pm_name : null, drafter_name: r.drafter_id === ctx.user.id ? r.drafter_name : null };
+  }));
 }
 
 type Stage = 'intake' | 'review' | 'final_record' | 'stamp' | 'ready' | 'delivered' | 'city';
@@ -383,11 +395,13 @@ async function getProject(ctx: Ctx) {
   ]);
   const slotSet = slotsOf(p, m, ctx.user.id);
   const slots = [...slotSet];
-  const vis = visiblePeople(p, slotSet, ctx.user.id);
+  const vis = visiblePeople(m, slotSet, ctx.user.id);
   return json({
     project: redactProject(p, slotSet, vis),
-    sets,
-    comments,
+    sets: sets.map((x) => redactSet(x, vis)),
+    comments: vis
+      ? comments.map((c: any) => (c.owner_id && !vis.has(c.owner_id) ? { ...c, owner_id: HIDDEN, owner_label: roleOf(p, c.owner_id), created_by: null } : { ...c, created_by: null }))
+      : comments,
     events: redactPeople(redactEvents(events, slots), p, slotSet, vis, 'actor_name', 'actor_id'),
     members: vis ? members.filter((x) => vis.has(x.user_id)) : members,
     my_slots: slots,
@@ -503,7 +517,7 @@ async function getSet(ctx: Ctx) {
   const slotSet = slotsOf(p, m, ctx.user.id);
   const slots = [...slotSet];
   const onlyDrafter = slots.length === 1 && slots[0] === 'drafter';
-  const vis = visiblePeople(p, slotSet, ctx.user.id);
+  const vis = visiblePeople(m, slotSet, ctx.user.id);
   const sendsOut = slotSet.has('pm') || slotSet.has('architect');
   const [fileRows, events, members, stamps, clientLinks] = await Promise.all([
     many(
@@ -531,13 +545,14 @@ async function getSet(ctx: Ctx) {
         ),
   ]);
   return json({
-    set: s,
+    set: redactSet(s, vis),
     project: redactProject(p, slotSet, vis),
     files: redactPeople(fileRows, p, slotSet, vis, 'uploaded_by_name', 'uploaded_by'),
     events: redactPeople(redactEvents(events, slots), p, slotSet, vis, 'actor_name', 'actor_id'),
     members: vis ? members.filter((x) => vis.has(x.user_id)) : members,
     my_slots: slots,
-    stamp_requests: stamps,
+    // Non-PMs see the link's address (they may have sent it) but not the engineer's name.
+    stamp_requests: vis ? stamps.map((r: any) => ({ ...r, engineer_name: '' })) : stamps,
     client_links: clientLinks,
   });
 }
@@ -950,7 +965,7 @@ async function publicDelivery(path: string, method: string): Promise<Response> {
     rev_number: r.rev_number,
     title: r.title,
     sealed_at: r.sealed_at,
-    sealed_by_name: r.sealed_by_name,
+    // Clients see that the set is stamped and the license, not the names of the firm's people.
     engineer_license: r.engineer_license,
     expires_at: r.expires_at,
     files: list,
@@ -1116,7 +1131,7 @@ async function updateComment(ctx: Ctx) {
       b.discipline !== undefined ? str(b.discipline, 60) : c.discipline,
       b.reviewer !== undefined ? str(b.reviewer, 120) : c.reviewer,
       b.body !== undefined ? str(b.body, 4000) || c.body : c.body,
-      b.owner_id !== undefined ? await memberOrNull(m, b.owner_id) : c.owner_id,
+      b.owner_id !== undefined && b.owner_id !== HIDDEN ? await memberOrNull(m, b.owner_id) : c.owner_id,
       status,
       b.response !== undefined ? str(b.response, 4000) : c.response,
       b.addressed_in_set_id !== undefined ? await setOrNull(m, c.project_id, b.addressed_in_set_id) : c.addressed_in_set_id,
