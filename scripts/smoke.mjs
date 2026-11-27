@@ -271,3 +271,97 @@ const sst = await row(PM, sp.id);
 ok(sst.stage === 'stamp' && sst.waiting_on === 'engineer' && !sst.your_turn, 'awaiting stamp, waiting on engineer');
 const hpr = await row(PM, p.id);
 ok(hpr.stage === 'delivered' && hpr.waiting_on === null && hpr.last_delivered_at, 'delivered project waits on nobody');
+
+// Permit timeline: five standard steps; the PM sets dates, marks steps done and adds steps.
+const tp = await PM(`/projects/${p.id}`);
+ok(tp.milestones.map((m) => m.kind).join() === 'submitted,under_review,comments_received,resubmitted,approved', 'project starts with the five permit steps');
+ok((await PM(`/projects/${p.id}`)).milestones.length === 5, 'opening again does not add more steps');
+const [msub, mrev] = tp.milestones;
+ok((await D(`/milestones/${msub.id}`, 'PATCH', { done_on: '2026-11-01' })).status === 403, 'drafter cannot change the timeline');
+ok((await A(`/projects/${p.id}/milestones`, 'POST', { label: 'x' })).status === 403, 'architect cannot add steps');
+ok((await outsider(`/milestones/${msub.id}`, 'PATCH', { done_on: '2026-11-01' })).status === 404, 'other firm cannot touch the timeline');
+ok((await PM(`/milestones/${msub.id}`, 'PATCH', { done_on: '11/01/2026' })).status === 400, 'bad dates are rejected');
+let mt = await PM(`/milestones/${msub.id}`, 'PATCH', { done_on: '2026-11-01', note: 'Portal ref 88' });
+ok(mt.milestones[0].done_on === '2026-11-01' && mt.milestones[0].note === 'Portal ref 88', 'PM marks submitted done with a date');
+mt = await PM(`/milestones/${mrev.id}`, 'PATCH', { target_on: '2026-11-20' });
+ok(mt.milestones[1].target_on === '2026-11-20' && !mt.milestones[1].done_on, 'PM sets a target date');
+mt = await PM(`/milestones/${mrev.id}`, 'PATCH', { done: true });
+ok(!!mt.milestones[1].done_on, 'done: true marks a step complete');
+mt = await PM(`/milestones/${mrev.id}`, 'PATCH', { done: false });
+ok(mt.milestones[1].done_on === null && mt.milestones[1].target_on === '2026-11-20', 'a step can be reopened and keeps its target');
+const added = await PM(`/projects/${p.id}/milestones`, 'POST', { label: 'Comments received (round 2)', target_on: '2026-12-15' });
+ok(added.status === 201 && added.milestones.length === 6 && added.milestones[4].label === 'Comments received (round 2)' && added.milestones[5].kind === 'approved', 'added step goes before Approved');
+ok((await PM(`/milestones/${added.id}`, 'DELETE')).milestones.length === 5, 'PM removes a step');
+const dt = await D(`/projects/${p.id}`);
+ok(dt.milestones.length === 5 && dt.milestones[0].done_on === '2026-11-01', 'drafter sees the timeline');
+ok(dt.events.some((e) => e.action === 'milestone_done'), 'marking a step done is logged');
+ok(dt.share_links.length === 0, 'drafter does not see share links');
+
+// Share links: a read-only page for the client, the whole project or one stamped set.
+ok((await D(`/projects/${p.id}/share-links`, 'POST', {})).status === 403, 'drafter cannot share');
+ok((await PM(`/projects/${p.id}/share-links`, 'POST', { revision_set_id: sp.id })).status === 400, 'set from another project is rejected');
+ok((await PM(`/projects/${sp.id}/share-links`, 'POST', { revision_set_id: sx.id })).status === 400, 'unsealed set cannot be shared');
+ok((await PM(`/projects/${p.id}/share-links`, 'POST', { email: 'nope' })).status === 400, 'bad email is rejected');
+const sh = await PM(`/projects/${p.id}/share-links`, 'POST', { name: 'Sam Owner', email: 'owner@client.test', days: 7 });
+ok(sh.status === 201 && sh.url.includes('/share/'), 'PM creates a project share link');
+const stoken = sh.url.split('/share/')[1];
+const spub = async (t, rest = '') => fetch(`${B}/api/public/share/${t}${rest}`);
+const sv = await (await spub(stoken)).json();
+ok(sv.scope === 'project' && sv.project.name === 'Hillside Residence' && sv.timeline.length === 5, 'client sees the project and permit timeline');
+ok(sv.sets.length >= 2 && sv.sets.every((s) => s.files.every((f) => f.filename && !f.storage_key)), 'client sees every stamped set');
+ok(sv.timeline.every((m) => m.note === undefined && m.id === undefined), 'timeline notes stay with the team');
+ok(!/Pat PE|Kairos PM|Dana Drafter|Ana Architect|Eli Engineer|Portal ref/.test(JSON.stringify(sv)), 'share page shows no team names or notes');
+ok(!JSON.stringify(sv).includes('final.pdf') && !JSON.stringify(sv).includes('A-101.pdf'), 'share page shows only stamped PDFs');
+const sfile = sv.sets.find((s) => s.files.length).files[0];
+const sdl = await (await spub(stoken, `/files/${sfile.id}`)).json();
+ok(sdl.url && !sdl.url.includes('inline') && (await fetch(sdl.url)).ok, 'client downloads a stamped PDF');
+const spv = await (await spub(stoken, `/files/${sfile.id}?inline=1`)).json();
+const spr = await fetch(spv.url);
+ok(spr.ok && spr.headers.get('content-disposition') === 'inline', 'client previews the PDF in the browser');
+const working = (await PM(`/sets/${set1.id}`)).files.find((f) => f.kind === 'final_pdf');
+ok((await spub(stoken, `/files/${working.id}`)).status === 404, 'working files cannot be fetched through the link');
+ok((await spub('x'.repeat(30))).status === 404, 'made-up token is rejected');
+await spub(stoken);
+const sl = (await PM(`/projects/${p.id}`)).share_links.find((l) => l.id === sh.id);
+ok(sl.open_count === 2 && sl.opened_at && sl.recipient_name === 'Sam Owner', 'PM sees how often the link was opened');
+const dsh = await D(`/projects/${p.id}`);
+ok(dsh.events.some((e) => e.action === 'share_opened' && e.actor_name === 'Client') && !JSON.stringify(dsh).includes('Sam Owner'), 'drafter sees "Client" opened it, not the name');
+const one1 = await PM(`/projects/${p.id}/share-links`, 'POST', { revision_set_id: set1.id, show_timeline: false });
+const ov = await (await spub(one1.url.split('/share/')[1])).json();
+ok(ov.scope === 'set' && ov.sets.length === 1 && ov.sets[0].id === set1.id && ov.timeline === null, 'set link shows just that stamped set');
+const otherFile = sv.sets.find((s) => s.id !== set1.id && s.files.length)?.files[0];
+ok(!otherFile || (await spub(one1.url.split('/share/')[1], `/files/${otherFile.id}`)).status === 404, 'set link cannot reach other sets');
+ok((await PM(`/share-links/${sh.id}`, 'DELETE')).ok && (await spub(stoken)).status === 404, 'turned-off share link stops working');
+ok((await D(`/share-links/${one1.id}`, 'DELETE')).status === 403, 'drafter cannot turn off links');
+
+// Resubmittal letter: project, revision and a comment / response table as a PDF.
+const lp = await PM(`/projects/${p.id}`);
+const rc = lp.comments.filter((c) => c.round_set_id === round.id);
+ok(rc.length > 0, 'city round has comments to answer');
+await PM(`/comments/${rc[0].id}`, 'PATCH', { response: 'Added hold-down schedule on S-201 — see detail 4/S-501 ≥ 2 places.', status: 'addressed', addressed_in_set_id: round.id });
+const letterRes = await fetch(`${B}/api/sets/${round.id}/resubmittal-letter`, {
+  method: 'POST',
+  headers: { authorization: 'Bearer ' + (await tok(em('pm'), 'Kairos PM')), 'x-arc-firm': firm.firm_id, 'content-type': 'application/json' },
+  body: JSON.stringify({ signer: 'Kairos PM' }),
+});
+const pdf = Buffer.from(await letterRes.arrayBuffer());
+ok(letterRes.status === 200 && letterRes.headers.get('content-type') === 'application/pdf' && pdf.subarray(0, 5).toString() === '%PDF-', 'PM downloads the letter as a PDF');
+ok(/Resubmittal-Hillside-Residence-Rev\d+\.pdf/.test(letterRes.headers.get('content-disposition') || ''), 'letter is named after the project and revision');
+const { PDFDocument } = await import('pdf-lib');
+const ldoc = await PDFDocument.load(pdf);
+ok(ldoc.getPageCount() >= 1 && ldoc.getTitle().includes('Hillside Residence'), 'letter PDF opens and carries the project');
+ok((await D(`/sets/${round.id}/resubmittal-letter`, 'POST', {})).status === 403, 'drafter cannot generate the letter');
+ok((await PM(`/sets/${sx.id}/resubmittal-letter`, 'POST', {})).status === 400, 'a revision with no city comments has no letter');
+ok((await PM(`/projects/${p.id}`)).events.some((e) => e.action === 'resubmittal_letter'), 'generating the letter is logged');
+// A long comment list spills onto more pages without losing rows.
+const manyC = Array.from({ length: 40 }, (_, i) => ({ number: String(100 + i), sheet: 'A-2' + i, discipline: 'Building', body: 'Provide guardrail detail. '.repeat(12) }));
+await PM(`/projects/${p.id}/letter/import`, 'POST', { items: manyC, revision_set_id: round.id });
+const lp2 = await PM(`/projects/${p.id}`);
+for (const c of lp2.comments.filter((c) => Number(c.number) >= 100)) await PM(`/comments/${c.id}`, 'PATCH', { addressed_in_set_id: round.id, response: 'Detail added. '.repeat(30) });
+const big = await fetch(`${B}/api/sets/${round.id}/resubmittal-letter`, {
+  method: 'POST',
+  headers: { authorization: 'Bearer ' + (await tok(em('pm'), 'Kairos PM')), 'x-arc-firm': firm.firm_id, 'content-type': 'application/json' },
+  body: '{}',
+});
+const bigDoc = await PDFDocument.load(Buffer.from(await big.arrayBuffer()));
+ok(big.status === 200 && bigDoc.getPageCount() >= 4, `long letter runs to ${bigDoc.getPageCount()} pages`);

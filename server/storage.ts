@@ -3,7 +3,8 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 export interface Storage {
   uploadUrl(key: string, contentType: string): Promise<string>;
-  downloadUrl(key: string, filename: string): Promise<string>;
+  /** inline: the browser shows the file (a PDF preview) instead of saving it. */
+  downloadUrl(key: string, filename: string, inline?: boolean): Promise<string>;
   size(key: string): Promise<number | null>;
   remove(keys: string[]): Promise<void>;
 }
@@ -31,13 +32,14 @@ function s3Storage(): Storage {
   return {
     uploadUrl: (Key, ContentType) =>
       getSignedUrl(client, new PutObjectCommand({ Bucket, Key, ContentType }), { expiresIn: 900 }),
-    downloadUrl: (Key, filename) =>
+    downloadUrl: (Key, filename, inline) =>
       getSignedUrl(
         client,
         new GetObjectCommand({
           Bucket,
           Key,
-          ResponseContentDisposition: `attachment; filename="${filename.replace(/["\\\r\n]/g, '_')}"`,
+          ResponseContentDisposition: `${inline ? 'inline' : 'attachment'}; filename="${filename.replace(/["\\\r\n]/g, '_')}"`,
+          ...(inline ? { ResponseContentType: 'application/pdf' } : {}),
         }),
         { expiresIn: 300 },
       ),

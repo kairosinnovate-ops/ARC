@@ -21,7 +21,7 @@ setQuery(async (text, params = []) => (await pool.query(text, params as any[])).
 
 setStorage({
   uploadUrl: async (key) => `${ORIGIN}/dev-storage/${encodeURIComponent(key)}`,
-  downloadUrl: async (key) => `${ORIGIN}/dev-storage/${encodeURIComponent(key)}`,
+  downloadUrl: async (key, _name, inline) => `${ORIGIN}/dev-storage/${encodeURIComponent(key)}${inline ? '?inline=1' : ''}`,
   size: async (key) => {
     const p = join(root, key);
     return existsSync(p) ? statSync(p).size : null;
@@ -72,7 +72,9 @@ export async function middleware(req: IncomingMessage, res: ServerResponse, next
         writeFileSync(p, await readBody(req));
         res.end();
       } else {
-        res.setHeader('content-disposition', 'attachment');
+        const inline = url.includes('?inline=1');
+        res.setHeader('content-disposition', inline ? 'inline' : 'attachment');
+        if (inline) res.setHeader('content-type', 'application/pdf');
         res.end(readFileSync(p));
       }
       return;

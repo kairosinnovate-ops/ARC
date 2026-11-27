@@ -10,6 +10,7 @@ import TeamPage from './pages/Team';
 import TrashPage from './pages/Trash';
 import DeliveryPage from './pages/Delivery';
 import StampPage from './pages/Stamp';
+import SharePage from './pages/Share';
 
 export type Firm = { firm_id: string; firm_name: string; role: Role; is_admin: boolean };
 type Session = {
@@ -40,6 +41,7 @@ export default function App() {
         <Routes>
           <Route path="/stamp/:token" element={<StampPage />} />
           <Route path="/d/:token" element={<DeliveryPage />} />
+          <Route path="/share/:token" element={<SharePage />} />
           <Route path="*" element={<Boot />} />
         </Routes>
       </BrowserRouter>

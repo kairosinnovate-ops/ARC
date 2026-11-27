@@ -27,6 +27,30 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
   return data as T;
 }
 
+/** A POST that returns a file (the resubmittal letter PDF). Saves it under the server's file name. */
+export async function apiDownload(path: string, body: unknown, fallbackName: string) {
+  const token = await auth.token();
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (token) headers.authorization = `Bearer ${token}`;
+  if (firmId) headers['x-arc-firm'] = firmId;
+  const r = await fetch('/api' + path, { method: 'POST', headers, body: JSON.stringify(body) });
+  if (!r.ok) {
+    const data = await r.json().catch(() => ({}));
+    throw new ApiError(r.status, data.error || `Request failed (${r.status})`);
+  }
+  const blob = await r.blob();
+  const name = /filename="([^"]+)"/.exec(r.headers.get('content-disposition') || '')?.[1] || fallbackName;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  return name;
+}
+
 export async function sha256(file: File): Promise<string> {
   const buf = await file.arrayBuffer();
   const digest = await crypto.subtle.digest('SHA-256', buf);

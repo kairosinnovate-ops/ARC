@@ -68,6 +68,8 @@ const paths: Record<string, string> = {
   trash: 'M4 7h16M9 7V4h6v3m-8 0l1 13h8l1-13',
   letter: 'M4 5h16v14H4zM4 6l8 7 8-7',
   lock: 'M6 11h12v9H6zM8 11V7a4 4 0 018 0v4',
+  link: 'M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1',
+  timeline: 'M3 12h18M6 9v6M12 9v6M18 9v6',
   file: 'M14 3H6a1 1 0 00-1 1v16a1 1 0 001 1h12a1 1 0 001-1V8l-5-5zm0 0v5h5',
 };
 export function Icon({ name, size = 16 }: { name: keyof typeof paths | string; size?: number }) {
@@ -212,6 +214,11 @@ const EVENT_TEXT: Record<string, string> = {
   project_deleted: 'moved the project to Trash',
   project_restored: 'restored the project from Trash',
   note_added: 'left a note',
+  milestone_done: 'marked a permit step done:',
+  milestone_reopened: 'reopened a permit step:',
+  share_link_created: 'shared a read-only link to',
+  share_opened: 'opened the shared link',
+  resubmittal_letter: 'generated the resubmittal letter for',
   review_note: 'left a reviewer note',
 };
 export function eventText(action: string) {

@@ -5,8 +5,14 @@ import { useSession } from '../App';
 import { setTypeList } from '../ui';
 import { Avatar, COMMENT_STATUS, ConfirmByName, Dialog, Icon, NOTE_EVENTS, Pill, SET_STATUS, eventText, fmtDate, timeAgo, useToast } from '../ui';
 import { ProjectFields, toForm, type ProjectFormValue } from './ProjectForm';
+import { PermitTimeline, type Milestone } from './PermitTimeline';
+import { ShareDialog } from './Share';
+import { ResubmittalDialog, letterRounds } from './Resubmittal';
 
-type Data = { project: any; sets: any[]; comments: any[]; events: any[]; members: any[]; my_slots: string[] };
+type Data = {
+  project: any; sets: any[]; comments: any[]; events: any[]; members: any[]; my_slots: string[];
+  milestones: Milestone[]; share_links: any[];
+};
 
 export default function ProjectPage() {
   const { id } = useParams();
@@ -17,6 +23,7 @@ export default function ProjectPage() {
   const [err, setErr] = useState('');
   const [editing, setEditing] = useState(false);
   const [sending, setSending] = useState<null | { intake?: boolean; fromComments?: boolean }>(null);
+  const [sharing, setSharing] = useState(false);
 
   const load = useCallback(() => api<Data>(`/projects/${id}`).then(setD).catch((e) => setErr(e.message)), [id]);
   useEffect(() => {
@@ -48,6 +55,7 @@ export default function ProjectPage() {
           <p className="hint">{[p.address, p.jurisdiction].filter(Boolean).join(' · ') || 'Add the site address and jurisdiction.'}</p>
         </div>
         <div className="row">
+          {isPM && <button className="btn" onClick={() => setSharing(true)}><Icon name="link" /> Share with client</button>}
           {isPM && <button className="btn" onClick={() => setEditing(true)}>Edit project and people</button>}
           {!active && (isPM || isArchitect) && (
             <button className={`btn${isPM ? '' : ' primary'}`} onClick={() => setSending({ intake: true })}>
@@ -66,6 +74,18 @@ export default function ProjectPage() {
           )}
         </div>
       </div>
+
+      <section className="card" style={{ marginBottom: 22 }}>
+        <div className="card-h" style={{ marginBottom: 6 }}>
+          <h2>Permit timeline</h2>
+          {!isPM && <span className="hint">The project manager keeps this up to date.</span>}
+        </div>
+        <PermitTimeline
+          milestones={d.milestones}
+          projectId={isPM ? p.id : undefined}
+          onChange={isPM ? (ms) => { setD({ ...d, milestones: ms }); load(); } : undefined}
+        />
+      </section>
 
       <div className="grid2">
         <div className="col" style={{ gap: 22 }}>
@@ -139,7 +159,7 @@ export default function ProjectPage() {
               </div>
             )}
           </section>
-          <CommentLog data={d} reload={load} canStartRound={isPM && !active} onStartRound={() => setSending({ fromComments: true })} />
+          <CommentLog data={d} reload={load} isPM={isPM} canStartRound={isPM && !active} onStartRound={() => setSending({ fromComments: true })} />
         </div>
         <section className="card">
           <h2>Activity</h2>
@@ -164,6 +184,7 @@ export default function ProjectPage() {
           )}
         </section>
       </div>
+      {sharing && <ShareDialog project={p} sets={sets} links={d.share_links} onClose={() => setSharing(false)} onChange={load} />}
       {editing && <EditProject project={p} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); load(); }} />}
       {sending && (
         <SendToDrafter
@@ -299,7 +320,9 @@ function SendToDrafter({ project, rev, drafter, intake, comments, onClose, onSen
 
 // ---------------- City comment log ----------------
 
-function CommentLog({ data, reload, canStartRound, onStartRound }: { data: Data; reload: () => void; canStartRound: boolean; onStartRound: () => void }) {
+function CommentLog({ data, reload, isPM, canStartRound, onStartRound }: { data: Data; reload: () => void; isPM: boolean; canStartRound: boolean; onStartRound: () => void }) {
+  const [letter, setLetter] = useState(false);
+  const canLetter = isPM && letterRounds(data.sets, data.comments).length > 0;
   const [filter, setFilter] = useState<'active' | 'all' | 'addressed'>('active');
   const [sheet, setSheet] = useState('');
   const [adding, setAdding] = useState(false);
@@ -326,6 +349,7 @@ function CommentLog({ data, reload, canStartRound, onStartRound }: { data: Data;
           </div>
         </div>
         <div className="row">
+          {canLetter && <button className="btn" onClick={() => setLetter(true)}><Icon name="file" /> Resubmittal letter</button>}
           <button className="btn" onClick={() => setImporting(true)}><Icon name="letter" /> Paste a letter</button>
           <button className="btn" onClick={() => setAdding(true)}><Icon name="plus" /> Add comment</button>
         </div>
@@ -389,6 +413,7 @@ function CommentLog({ data, reload, canStartRound, onStartRound }: { data: Data;
       {adding && <CommentForm data={data} onClose={() => setAdding(false)} onSaved={() => { setAdding(false); reload(); }} />}
       {edit && <CommentForm data={data} comment={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); reload(); }} />}
       {importing && <ImportLetter data={data} onClose={() => setImporting(false)} onSaved={() => { setImporting(false); reload(); }} />}
+      {letter && <ResubmittalDialog project={data.project} sets={data.sets} comments={data.comments} onClose={() => setLetter(false)} onSaved={reload} />}
     </section>
   );
 }

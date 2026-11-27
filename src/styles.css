@@ -357,3 +357,40 @@ button.qi { width: 100%; text-align: left; }
   .flight .sheet { left: calc(100% - 30px); }
   .flight .track::after { width: 100%; }
 }
+
+/* Permit timeline: the permit's path through the city. Done steps are green, the current step is lit. */
+.ptl-wrap { display: flex; flex-direction: column; gap: 14px; }
+.ptl-sum { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ptl { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(var(--n, 5), minmax(0,1fr)); }
+.ptl li { position: relative; min-width: 0; }
+.ptl li::after { content: ""; position: absolute; left: calc(50% + 16px); right: calc(-50% + 16px); top: 21px; height: 2px; background: var(--line-2); border-radius: 2px; }
+.ptl li:last-child::after { display: none; }
+.ptl li.done::after { background: color-mix(in srgb, var(--seal) 60%, var(--line-2)); }
+.ptl-step { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; padding: 6px 6px 8px; border: 0; background: none; border-radius: 12px; color: inherit; }
+button.ptl-step { transition: background .15s; }
+button.ptl-step:hover { background: var(--accent-soft); }
+.ptl .dot { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums;
+  border: 2px solid var(--line-2); background: var(--sunk); color: var(--faint); position: relative; z-index: 1; }
+.ptl li.done .dot { background: var(--seal-soft); border-color: var(--seal); color: var(--seal); }
+.ptl li.now .dot { background: var(--accent); border-color: var(--accent); color: var(--paper); box-shadow: 0 0 0 5px var(--accent-ring); animation: pulse 2.4s ease-in-out infinite; }
+.ptl li.late .dot { border-color: var(--amber); }
+.ptl li.now.late .dot { background: var(--amber); box-shadow: 0 0 0 5px var(--amber-soft); }
+.ptl .lbl { font-weight: 500; font-size: 13px; line-height: 1.3; overflow-wrap: anywhere; }
+.ptl li.next .lbl { color: var(--muted); }
+.ptl .when { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ptl li.done .when { color: var(--seal); }
+.ptl .when.late { color: var(--amber); }
+@media (max-width: 700px) {
+  .ptl { grid-template-columns: minmax(0,1fr); gap: 2px; }
+  .ptl li::after { left: 21px; right: auto; top: 40px; bottom: -6px; width: 2px; height: auto; }
+  .ptl-step { flex-direction: row; text-align: left; align-items: center; gap: 12px; }
+  .ptl .lbl { flex: 1; }
+}
+
+.check { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink); cursor: pointer; }
+.check input { accent-color: var(--btn); width: 15px; height: 15px; }
+.citem.letter-row { grid-template-columns: 52px minmax(0,1fr) minmax(0,1fr); align-items: start; }
+.citem.letter-row textarea { min-height: 64px; }
+@media (max-width: 600px) { .citem.letter-row { grid-template-columns: minmax(0,1fr); } }
+@media (max-width: 600px) { .auth .hide-sm { display: none; } }
+.auth.public { grid-template-columns: minmax(0,1fr); place-items: start center; }
