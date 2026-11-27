@@ -180,17 +180,18 @@ ok(!existsSync(`${qdir}/${qs.id}`) || !(await import('node:fs')).readdirSync(`${
 ok(!(await PM('/trash'))._arr.some((x) => x.id === q.id), 'Trash is empty again');
 ok((await PM(`/projects/${p.id}`)).project?.id === p.id, 'other projects untouched');
 
-// Who sees who: only the PM sees the whole team
+// Who sees who: only the PM and admins see names. Everyone else sees roles and their own name.
 const dp = await D(`/projects/${p.id}`);
-ok(dp.project.architect_id === null && dp.project.engineer_id === null && dp.project.engineer_email === '', 'drafter does not see architect or engineer');
-ok(dp.members.every((x) => [dme.user.id, dp.project.pm_id].includes(x.user_id)), 'drafter sees only self and PM');
-ok(dp.events.filter((e) => e.actor_id === ame.user.id).every((e) => e.actor_name === 'Architect'), 'architect actions show as "Architect" to the drafter');
+ok(dp.project.architect_id === 'assigned' && dp.project.engineer_id === 'assigned' && dp.project.pm_id === 'assigned' && dp.project.engineer_email === '', 'drafter sees the slots are filled, not by whom');
+ok(dp.members.length === 1 && dp.members[0].user_id === dme.user.id, 'drafter sees only self');
+ok(dp.events.some((e) => e.actor_name === 'Architect') && dp.events.filter((e) => e.actor_name === 'Architect').every((e) => e.actor_id === 'assigned'), 'architect actions show as "Architect" to the drafter');
+ok(dp.events.some((e) => e.actor_name === 'Project manager'), 'PM actions show as "Project manager" to the drafter');
 const ap = await A(`/projects/${p.id}`);
-ok(ap.project.drafter_id === null && ap.project.engineer_id === eme.user.id, 'architect sees PM and engineer, not drafter');
+ok(ap.project.drafter_id === 'assigned' && ap.project.engineer_id === 'assigned' && ap.members.length === 1, 'architect does not see the drafter or engineer either');
 const pp = await PM(`/projects/${p.id}`);
 ok(pp.project.drafter_id === dme.user.id && pp.members.length >= 5, 'PM sees everyone');
 const dteam = await D('/team');
-ok(dteam.limited && !dteam.members.some((x) => x.user_id === ame.user.id), 'drafter team page hides other members');
+ok(dteam.limited && dteam.members.length === 1 && dteam.members[0].user_id === dme.user.id, 'drafter team page shows only themselves');
 const other = await PM('/projects', 'POST', { name: 'Not yours', drafter_id: dme.user.id });
 ok(!(await A('/projects'))._arr.some((x) => x.id === other.id), 'architect sees only projects they are on');
 ok((await A(`/projects/${other.id}`)).status === 404, 'architect cannot open other projects');
@@ -215,6 +216,23 @@ ok(cl.status === 201 && cl.url.includes('/d/'), 'PM creates client link');
 const ctoken = cl.url.split('/d/')[1];
 const cv = await (await fetch(`${B}/api/public/delivery/${ctoken}`)).json();
 ok(cv.files.length === 1 && cv.files[0].filename === 'stamped-by-email.pdf' && cv.project.name === 'Hillside Residence', 'client sees only the stamped set');
+ok(!/Pat PE|Kairos PM|Dana Drafter|Ana Architect|Eli Engineer/.test(JSON.stringify(cv)), 'client page shows no team names');
+
+// Name privacy: nothing a drafter, architect or engineer loads carries anyone else's name.
+const NAMES = { D: 'Dana Drafter', A: 'Ana Architect', E: 'Eli Engineer' };
+const OTHERS = ['Kairos PM', 'Dana Drafter', 'Ana Architect', 'Eli Engineer', 'Pat PE', 'Sam Owner', 'Other Drafter', 'owner@client.test', em('pm'), em('d1'), em('ar'), em('pe')];
+for (const [k, who] of [['D', D], ['A', A], ['E', E]]) {
+  const seen = JSON.stringify([
+    await who('/projects'), await who(`/projects/${p.id}`), await who(`/sets/${set.id}`),
+    await who(`/sets/${set1.id}`), await who(`/sets/${round.id}`), await who('/team'),
+  ]);
+  const mine = { D: em('d1'), A: em('ar'), E: em('pe') }[k];
+  const leaked = OTHERS.filter((n) => n !== NAMES[k] && n !== mine && seen.includes(n));
+  ok(leaked.length === 0, `${NAMES[k]} sees no one else's name${leaked.length ? ` (saw ${leaked.join(', ')})` : ''}`);
+  ok(seen.includes(NAMES[k]) || k === 'E', `${NAMES[k]} still sees their own name`);
+}
+const pseen = JSON.stringify([await PM(`/projects/${p.id}`), await PM(`/sets/${set.id}`)]);
+ok(['Dana Drafter', 'Ana Architect', 'Eli Engineer', 'Pat PE'].every((n) => pseen.includes(n)), 'PM still sees every name');
 const cdl = await (await fetch(`${B}/api/public/delivery/${ctoken}/files/${cv.files[0].id}`)).json();
 ok(cdl.url && (await fetch(cdl.url)).ok, 'client downloads without account');
 const rs = await PM(`/sets/${round.id}`);

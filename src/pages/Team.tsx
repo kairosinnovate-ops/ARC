@@ -62,7 +62,7 @@ export default function TeamPage() {
           <h1 style={{ marginTop: 8 }}>Team</h1>
           <p className="hint">
             {d?.limited
-              ? "You see yourself and the firm's project managers. Who works on each project is visible to the PM."
+              ? "For privacy, only project managers and admins see who's on the team. You see yourself, and each project shows the stage it's at."
               : "Each person's role here is their usual job. Who does what on a project is set on each project's page. Only PMs and admins see every project and the whole team. Everyone else sees the projects they're on and the PM."}
           </p>
         </div>
